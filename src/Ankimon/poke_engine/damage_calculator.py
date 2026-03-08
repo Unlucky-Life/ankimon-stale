@@ -63,6 +63,8 @@ SPECIAL_LOGIC_MOVES = {
     "finalgambit": lambda attacker, defender: [int(attacker.hp)] if "ghost" not in defender.types else None,
     "endeavor": lambda attacker, defender: [int(defender.hp - attacker.hp)] if defender.hp > attacker.hp and "ghost" not in defender.types else None,
     "painsplit": lambda attacker, defender: [defender.hp - (attacker.hp + defender.hp)/2],
+    "dragonrage": lambda attacker, defender: [40] if "fairy" not in defender.types else None,
+    "sonicboom": lambda attacker, defender: [20] if "ghost" not in defender.types else None,
 }
 
 
