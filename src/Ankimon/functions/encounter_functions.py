@@ -650,6 +650,7 @@ def catch_pokemon(
     if ankimon_tracker_obj.caught > 1:
         if settings_obj.get('gui.pop_up_dialog_message_on_defeat') is True:
             logger.log_and_showinfo("info",translator.translate("already_caught_pokemon")) # Display a message when the Pokémon is caught
+            return
 
     # If we arrive here, this means that ankimon_tracker_obj.caught == 1
     if nickname is not None or not nickname:
@@ -673,7 +674,7 @@ def catch_pokemon(
         if logger is not None:
             show_warning_with_traceback(parent=mw, exception=e, message="Error while catching Pokemon:") # Display a message when the Pokémon is caught
 
-    pokemon_pc.refresh_pokemon_grid()
+    pokemon_pc.refresh_gui()
 
 def handle_enemy_faint(
         main_pokemon: PokemonObject,
