@@ -552,6 +552,9 @@ def kill_pokemon(
     xp_share_individual_id = settings_obj.get("trainer.xp_share")
     if xp_share_individual_id:
         exp = xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon.id, exp, xp_share_individual_id)
+    
+    if main_pokemon.held_item == "lucky-egg":
+        exp = int(exp * 1.5)
 
     # Save main Pokémon's progress
     main_pokemon.level = save_main_pokemon_progress(
@@ -650,7 +653,6 @@ def catch_pokemon(
     if ankimon_tracker_obj.caught > 1:
         if settings_obj.get('gui.pop_up_dialog_message_on_defeat') is True:
             logger.log_and_showinfo("info",translator.translate("already_caught_pokemon")) # Display a message when the Pokémon is caught
-            return
 
     # If we arrive here, this means that ankimon_tracker_obj.caught == 1
     if nickname is not None or not nickname:
@@ -674,7 +676,7 @@ def catch_pokemon(
         if logger is not None:
             show_warning_with_traceback(parent=mw, exception=e, message="Error while catching Pokemon:") # Display a message when the Pokémon is caught
 
-    pokemon_pc.refresh_gui()
+    pokemon_pc.refresh_pokemon_grid()
 
 def handle_enemy_faint(
         main_pokemon: PokemonObject,
