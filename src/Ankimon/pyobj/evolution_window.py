@@ -295,7 +295,8 @@ class EvoWindow(QWidget):
                         pokemon["type"] = search_pokedex(evo_name.lower(), "types")
 
                         # mainPkmn lvl was updated during encounter defeat – this allows for multiple lvlUps after enemy Pkmn was defeated
-                        pokemon["level"] = main_pokemon.level
+                        if pokemon["individual_id"] == main_pokemon.individual_id: # Check evolving pokemon is the main pokemon
+                            pokemon["level"] = main_pokemon.level
                         attacks = pokemon["attacks"]
                         new_attacks = get_random_moves_for_pokemon(evo_name.lower(), int(pokemon["level"]))
                         for new_attack in new_attacks:
