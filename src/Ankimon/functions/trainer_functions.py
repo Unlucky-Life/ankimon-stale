@@ -91,6 +91,7 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
         current_xp = pokemon.get("xp") or pokemon.get("stats", {}).get("xp", 0)
         if pokemon['held_item'] == "lucky-egg":
             exp = int(exp * 1.5) # Multiply by 1.5 if pokemon holds lucky egg
+            msg += f"{pokemon['name']}'s Lucky Egg boosts its XP gained!\n"
         growth_rate = pokemon['growth_rate']  # MODIFIED: Use local variable for growth rate
         experience_needed = int(find_experience_for_level(growth_rate, current_level, remove_level_cap))  # MODIFIED: Pre-calculate needed XP
         evo_id = None # Initialize variable
