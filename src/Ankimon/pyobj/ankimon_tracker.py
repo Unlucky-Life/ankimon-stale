@@ -4,6 +4,7 @@ from datetime import datetime
 from .error_handler import show_warning_with_traceback
 from ..functions.pokedex_functions import extract_ids_from_file
 from ..utils import random_battle_scene
+from aqt import mw
 
 class AnkimonTracker:
     def __init__(self, trainer_card):
@@ -14,7 +15,7 @@ class AnkimonTracker:
         self.card_ratings_count = {
             "again": 0, "hard": 0, "good": 0, "easy": 0
         }
-        self.total_reviews = 0
+
 
         self.current_mode = "idle"
 
@@ -65,6 +66,12 @@ class AnkimonTracker:
 
         # Start the session timer when the object is initialized
         self.start_session_timer()
+
+    def get_total_reviews(self):
+        return mw.col.db.scalar(
+            "SELECT COUNT(*) FROM revlog WHERE id >= ?",
+           (mw.col.sched.day_cutoff - 86400) * 1000
+        )
 
     def set_main_pokemon(self, pokemon):
         """Set the main Pokémon being used."""
@@ -142,8 +149,6 @@ class AnkimonTracker:
         self.card_ratings_count[grade] += 1
         self.multiplier_card_ratings_count[grade] += 1
 
-        self.total_reviews += 1
-
         # Stop the card timer after answering
         self.reset_card_timer()
 
@@ -161,7 +166,7 @@ class AnkimonTracker:
     def get_stats(self):
         """Get all the tracked statistics."""
         return {
-            "total_reviews": self.total_reviews,
+            "total_reviews": self.get_total_reviews(),
             "card_streak": self.card_streak,
             "card_ratings_count": self.card_ratings_count,
             "multiplier": self.multiplier,

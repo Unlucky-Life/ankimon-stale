@@ -315,7 +315,7 @@ aqt.gui_hooks.reviewer_did_answer_card.append(answerCard_after)
 
 
 #get main pokemon details:
-if database_complete:
+def initialize_pokemon():
     try:
         mainpokemon_name, mainpokemon_id, mainpokemon_ability, mainpokemon_type, mainpokemon_stats, mainpokemon_attacks, mainpokemon_level, mainpokemon_base_experience, mainpokemon_xp, mainpokemon_hp, mainpokemon_current_hp, mainpokemon_growth_rate, mainpokemon_ev, mainpokemon_iv, mainpokemon_evolutions, mainpokemon_battle_stats, mainpokemon_gender, mainpokemon_nickname = get_main_pokemon_data()
         starter = True
@@ -387,7 +387,7 @@ def on_review_card(*args):
         ankimon_tracker_obj.cards_battle_round += 1
         ankimon_tracker_obj.cry_counter += 1
         cry_counter = ankimon_tracker_obj.cry_counter
-        total_reviews = ankimon_tracker_obj.total_reviews
+        total_reviews = ankimon_tracker_obj.get_total_reviews()
         reviewer_obj.seconds = 0
         reviewer_obj.myseconds = 0
         ankimon_tracker_obj.general_card_count_for_battle += 1
@@ -712,6 +712,11 @@ def DefeatPokemonHook():
 
 def on_profile_did_open():
     """Initialize services after profile is loaded."""
+
+    # Initialize main and enemy pokemon
+    if database_complete:
+        initialize_pokemon()
+
     # Show tip of the day
     try:
         show_tip_of_the_day()
