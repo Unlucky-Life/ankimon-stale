@@ -163,7 +163,7 @@ def choose_random_pkmn_from_tier():
         id (int): Pokedex ID for generated Pokemon
         tier (string): Rarity tier for generated Pokemon (normal/ultra/legendary etc.)
     """
-    total_reviews = ankimon_tracker_obj.total_reviews
+    total_reviews = ankimon_tracker_obj.get_total_reviews()
     trainer_level = trainer_card.level
     try:
         tier = get_tier(total_reviews, trainer_level)
