@@ -64,7 +64,7 @@ def find_experience_for_level(group_growth_rate, level, remove_levelcap=True):
     if group_growth_rate == "medium":
         group_growth_rate = "medium-fast"
     elif group_growth_rate == "slow-then-very-fast":
-        group_growth_rate = "fluctuating"
+        group_growth_rate = "erratic"
     elif group_growth_rate == "fast-then-very-slow":
         group_growth_rate = "fluctuating"
     # Specify the growth rate and level you're interested in
@@ -87,7 +87,7 @@ def find_experience_for_level(group_growth_rate, level, remove_levelcap=True):
 
             return experience
     elif level > 99:
-        if group_growth_rate == "erractic":
+        if group_growth_rate == "erratic":
             if level + 1 < 50: # +1 was added to prevent -ve amounts of xp to come up (even though it wouldn't since the loop only takes in levels above 99)
                 experience = ((((level+1) ** 3) * (100 - (level+1))) // 50 - ((level ** 3) * (100 - level) // 50))
             elif 50 <= level < 68:
