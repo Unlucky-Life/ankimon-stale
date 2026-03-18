@@ -407,7 +407,7 @@ def on_review_card(*args):
             if not check_for_badge(achievements,6):
                 receive_badge(6, achievements)
 
-        if total_reviews == 10:
+        if total_reviews == settings_obj.get("battle.daily_average"):
             settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + 200)
             trainer_card.cash = settings_obj.get("trainer.cash")
 
