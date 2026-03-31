@@ -378,7 +378,7 @@ aqt.gui_hooks.reviewer_did_answer_card.append(answerCard_after)
 
 
 # get main pokemon details:
-if database_complete:
+def initialize_pokemon():
     try:
         (
             mainpokemon_name,
