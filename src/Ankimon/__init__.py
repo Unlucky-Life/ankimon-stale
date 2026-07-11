@@ -164,6 +164,10 @@ mw.logger = logger
 mw.translator = translator
 mw.settings_obj = settings_obj
 
+from . import multiplayer as ankimon_multiplayer
+
+ankimon_multiplayer.init_multiplayer(settings_obj, logger, main_pokemon)
+
 from .gui_classes import overview_team
 
 # Log an startup message
@@ -359,17 +363,22 @@ def answerCard_after(rev, card, ease):
     maxEase = rev.mw.col.sched.answerButtons(card)
     aw = aqt.mw.app.activeWindow() or aqt.mw
     # Aktualisieren Sie die Zählung basierend auf der Bewertung
+    time_spent_on_card = ankimon_tracker_obj.card_time_elapsed
+    grade = None
     if ease == 1:
-        ankimon_tracker_obj.review("again")
+        grade = "again"
     elif ease == maxEase - 2:
-        ankimon_tracker_obj.review("hard")
+        grade = "hard"
     elif ease == maxEase - 1:
-        ankimon_tracker_obj.review("good")
+        grade = "good"
     elif ease == maxEase:
-        ankimon_tracker_obj.review("easy")
+        grade = "easy"
     else:
         # default behavior for unforeseen cases
         tooltip("Error in ColorConfirmation: Couldn't interpret ease")
+    if grade is not None:
+        ankimon_tracker_obj.review(grade)
+        ankimon_multiplayer.notify_card_reviewed(grade, time_spent_on_card)
     ankimon_tracker_obj.reset_card_timer()
 
 

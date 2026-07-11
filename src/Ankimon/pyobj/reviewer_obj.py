@@ -175,6 +175,19 @@ class Reviewer_Manager:
             if self.settings.get("gui.hp_bar_config") is True:
                 hud_html += '<div id="mylife-bar" class="Ankimon"></div>'
 
+        # Multiplayer overlay (raid boss bar / PvP turn tokens), rendered
+        # from the controller's cached state only — never blocks on network.
+        mp_fragment = None
+        try:
+            from ..multiplayer import get_controller
+            mp_controller = get_controller()
+            if mp_controller is not None:
+                mp_fragment = mp_controller.get_hud_fragment()
+        except Exception:
+            mp_fragment = None
+        if mp_fragment:
+            hud_html += mp_fragment[0]
+
         hud_html += '</div>'
 
         # Build hud_css
@@ -230,6 +243,8 @@ class Reviewer_Manager:
             padding: 4px 8px !important;
         }
         """
+        if mp_fragment:
+            hud_css += mp_fragment[1]
 
         # Use reviewer.web.eval to call the portal
         js_code = f"""

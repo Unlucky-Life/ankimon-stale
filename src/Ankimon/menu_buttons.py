@@ -113,6 +113,16 @@ def create_menu_actions(
         ankimon_window_action.setShortcut(QKeySequence(f"{ankimon_key}"))
         qconnect(ankimon_window_action.triggered, test_window.open_dynamic_window)
 
+        # Multiplayer (raid boss + friend battles)
+        def open_multiplayer():
+            from .multiplayer.window import open_multiplayer_window
+            open_multiplayer_window()
+
+        multiplayer_action = QAction("Multiplayer", mw)
+        multiplayer_action.setMenuRole(QAction.MenuRole.NoRole)
+        game_menu.addAction(multiplayer_action)
+        qconnect(multiplayer_action.triggered, open_multiplayer)
+
         # Itembag
         itembag_action = QAction(mw.translator.translate("itembag_button"), mw)
         itembag_action.setMenuRole(QAction.MenuRole.NoRole)
