@@ -119,6 +119,87 @@ interval, not a transport change.
   damage bounded by reported level/stats, monotonic timestamps, idempotency
   keys to make client retries safe.
 
+## Balancing
+
+The unit of power in Ankimon is the answered card, and player populations
+differ on three axes: review volume per day, review quality (grades), and
+Pokémon strength (level/team). Balance means no axis dominates and none can
+be gamed.
+
+One hard rule up front: **local battle turns are not a balance input.**
+`battle.cards_per_round` is a client setting (`src/Ankimon/__init__.py:984`,
+default 2, user-editable), and move choice can be manual
+(`controls.allow_to_choose_moves`). All multiplayer math derives from
+*answered-card events* and is computed **server-side**.
+
+### Co-op raid boss
+
+- **Contribution formula (server-side), per answered card:**
+  `contribution = base × grade_weight × level_factor`
+  - `grade_weight`: reuse the established weights from
+    `ankimon_tracker.calc_multiply_card_rating` — easy 1.0, good 0.5,
+    hard 0.25, again 0. Quality matters, exactly as it already does locally.
+  - `level_factor`: sub-linear, e.g. `1 + log2(main_level) / 4` — a level-60
+    Pokémon hits ~2.5× a level-1, not 60×. Progression is felt but grinding
+    Pokémon levels can't trivialize raids.
+- **Soft daily cap with diminishing returns.** Full value up to a personal
+  daily target (the player's trailing 7-day median reviews, clamped to
+  e.g. 50–300), square-root taper beyond it. This stops one whale from
+  soloing the boss, keeps low-volume players relevant, and deliberately
+  *doesn't* reward junk-review grinding — incentives stay aligned with
+  actually studying.
+- **Boss HP is fit to the party, not fixed.**
+  `boss_hp = target_days × Σ expected_daily_contribution(participants)`,
+  computed from each member's trailing averages at raid start. A 3-person
+  casual lobby and a 10-person hardcore lobby both get a ~5-day raid.
+  Mid-raid joins either rescale HP proportionally or are locked out —
+  pick one and keep it simple (lockout recommended for v1).
+- **Rewards by personal participation, not leaderboard rank.** Tiers keyed
+  to each player's own expected contribution (e.g. ≥60% of your baseline =
+  full reward), prorated by boss % killed if the timer expires (the boss
+  "flees" — raids fail soft, never punish). A single cosmetic for top
+  contributor is fine; ranked *rewards* are not.
+
+### PvP
+
+- **Decouple power from volume: turn tokens.** Answering X cards charges one
+  turn token; a player banks at most K tokens (e.g. 3). A match advances in
+  rounds — a round resolves only when *both* players have committed a turn.
+  Review volume controls how *fast* you play, never how *much* you hit.
+- **Normalize stats in ranked: league format.** Both teams are scaled to a
+  reference level (e.g. 50) for ranked queues, so team composition and move
+  choice are the skill expression. Offer an unscaled "open" queue for
+  players who want their grind to show.
+- **Review quality = bounded edge.** Map the existing 0–1 tracker multiplier
+  for the cards behind each turn to a small bonus (≤ ±15% damage, or
+  crit/priority chance). Good studying gives an edge, never a steamroll.
+- **Deterministic peer-verified resolution (no Go port of the engine).**
+  The server issues a per-round RNG seed. Both clients run poke_engine with
+  identical inputs (both serialized teams, both committed moves, the seed)
+  and report the resulting state hash. Hashes match → outcome accepted;
+  mismatch → round flagged and replayed. The opponent is the validator; the
+  Go server only compares hashes and enforces caps.
+- **Match pacing.** Matchmake on two axes: rating (Glicko-2) *and* activity
+  cadence (pair similar daily review counts so rounds don't stall for days).
+  Turn timer of 24–48 h, then an auto-move (server picks the first usable
+  move); forfeit after several consecutive timeouts.
+- **Commit-then-reveal move order.** Both players submit moves before either
+  sees the other's choice (server holds them until the round closes), so the
+  second mover gains nothing.
+
+### Between the two modes
+
+- **One event stream powers both.** Every answered card contributes to the
+  active raid *and* charges the PvP turn meter simultaneously — players never
+  choose between modes, and the review flow stays the only loop.
+- **Parallel, non-stacking rewards.** Raids pay out items/cosmetics; PvP pays
+  rating and seasonal cosmetics. Neither grants XP or currency the other
+  needs, so neither mode becomes strictly optimal.
+- **Shared integrity caps.** Server-side, per account: sustained review rate
+  cap (~1 card / 2 s), monotonic timestamps, and grade-distribution sanity
+  (100% "easy" at 1 s/card gets flagged) — protecting raid and PvP with the
+  same checks.
+
 ## Rollout plan
 
 1. **Phase 0 — network layer:** add `api_client` + `outbox`; port the
