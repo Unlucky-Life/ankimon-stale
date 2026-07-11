@@ -34,7 +34,11 @@ review loop wait on the network.
 3. **Asynchronous multiplayer modes only (at first).** Review pacing is
    unpredictable (seconds to minutes per card), so real-time synchronous
    duels fight the medium. Raid bosses and async PvP fit it naturally.
-4. **Offline is a first-class state.** Events queue and flush later; failures
+4. **Plain request/response HTTP only — no WebSockets, no held
+   connections.** Every exchange with the server is a short-lived HTTP
+   call; "push" is emulated by piggybacking state on responses and by
+   adaptive polling.
+5. **Offline is a first-class state.** Events queue and flush later; failures
    are logged (`mw.logger`), never surfaced as dialogs mid-review.
 
 ## Client architecture (addon side)
@@ -61,11 +65,23 @@ New module `src/Ankimon/net/outbox.py` (event queue):
   offline session syncs next time; flush also on `profile_will_close` and
   `sync_did_finish` (hooks already wired in `hooks.py` / `__init__.py:936`).
 
-Server → client updates: piggyback on the review cadence. Each batch flush
-response carries the current shared state (e.g. raid boss HP, opponent turn
-ready). That gives near-real-time feel with **zero extra requests**. A
-WebSocket/SSE channel is a later optimization, not a v1 requirement
-(PyQt6.QtWebSockets is available in Anki's bundled Qt if needed).
+Server → client updates — **polling only, no persistent connections**:
+
+- Primary channel: piggyback on the review cadence. Each batch flush
+  response carries the current shared state (e.g. raid boss HP, opponent
+  turn ready). Near-real-time feel with **zero extra requests** while the
+  player is actually reviewing.
+- Secondary channel: adaptive background polling of `GET /v1/state` for the
+  idle case (player has Anki open but isn't answering cards) — e.g. every
+  30 s while a raid/match is active, backing off to minutes when nothing is
+  active, stopped entirely when the player has no live multiplayer session.
+- Cheap by construction: `GET /v1/state` supports `If-None-Match`/ETag (or a
+  `since` cursor) so idle polls are 304s costing a few hundred bytes.
+
+WebSockets and SSE are **out of scope by decision** — the deployment model
+for the Go API won't support held connections, so nothing in the protocol
+may assume one. If lower latency is ever needed, the knob is the poll
+interval, not a transport change.
 
 ## Multiplayer modes, ranked by fit
 
@@ -79,8 +95,11 @@ WebSocket/SSE channel is a later optimization, not a v1 requirement
    validated server-side against level/stat caps), applied to a
    server-authoritative HP ledger. Opponent turns arrive via the flush
    response and render as tooltips + life-bar updates between cards.
-3. **Real-time duels — defer.** Only worth it with both players in an active
-   session; requires WebSockets, presence, and turn timers. Revisit after 1–2.
+3. **"Live" duels — reframe, don't build on push.** With both players in an
+   active review session, the piggyback channel already delivers opponent
+   turns within one card-answer of each other — that's as "live" as the
+   medium gets, and it needs no new transport. True lockstep realtime is out
+   of scope (see the no-held-connections decision above).
 
 ## Go API sketch
 
@@ -91,6 +110,8 @@ WebSocket/SSE channel is a later optimization, not a v1 requirement
 - Core endpoints:
   - `POST /v1/events:batch` — idempotent batch ingest; response embeds the
     caller's active multiplayer state (raid/boss snapshot, pending PvP turns).
+  - `GET /v1/state` — the same state snapshot on its own, ETag/cursor-aware,
+    for idle polling.
   - `POST /v1/raids` / `POST /v1/raids/{id}/join` / `GET /v1/raids/{id}`
   - `POST /v1/matches` (matchmaking), `POST /v1/matches/{id}/turns`,
     `GET /v1/matches/{id}`
@@ -107,5 +128,7 @@ WebSocket/SSE channel is a later optimization, not a v1 requirement
    the reviewer iframe; lobby UI as a normal menu window via
    `create_menu_actions` (multiplayer UI lives outside the review loop).
 3. **Phase 2 — async PvP** on the same event/turn ledger.
-4. **Phase 3 (optional) — realtime/presence** over WebSocket once the async
-   modes prove retention.
+4. **Phase 3 (optional) — polish the live feel** within plain HTTP: tune the
+   adaptive poll intervals, add the ETag/cursor fast path, and surface
+   presence ("opponent is reviewing now") from recent-activity timestamps the
+   server already has from batch ingests.
