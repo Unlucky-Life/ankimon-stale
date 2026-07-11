@@ -119,6 +119,99 @@ interval, not a transport change.
   damage bounded by reported level/stats, monotonic timestamps, idempotency
   keys to make client retries safe.
 
+## Integrating into the existing reviewer loop
+
+The guiding rule: **multiplayer is an overlay on the wild-battle loop, not a
+new branch inside it.** The existing flow (answer card → tracker → local
+poke_engine turn → catch/XP/evolution) stays byte-for-byte identical whether
+or not multiplayer is active. Raids and PvP consume the *same review events*
+in parallel; they never replace the wild battle. That is what keeps the
+player flow untouched — joining a raid changes nothing about how reviewing
+feels, it only adds a bar and occasional toasts.
+
+### One new seam, not new branches
+
+`on_review_card` (`src/Ankimon/__init__.py:460`) is a ~300-line function with
+globals; adding mode-branches to it would rot fast. Instead, add a single
+publish call in `answerCard_after` (`src/Ankimon/__init__.py:358`) — the hook
+that already normalizes ease → grade:
+
+```python
+# answerCard_after, after ankimon_tracker_obj.review(grade)
+multiplayer.on_card_reviewed(grade, ankimon_tracker_obj.card_time_elapsed)
+```
+
+That is the *only* line multiplayer adds to the hot path. It appends to the
+outbox (in-memory, microseconds) and returns; the whole call is wrapped
+internally in try/except + logger so multiplayer can never break a review.
+
+### Module layout
+
+```
+src/Ankimon/multiplayer/
+    __init__.py     # MultiplayerController — owns all state, single entry points
+    api_client.py   # requests.Session, timeouts, background dispatch
+    outbox.py       # persistent event queue + batch flusher
+    raid.py         # cached raid state, display-side contribution math
+    pvp.py          # turn-token meter, cached match state
+    hud.py          # get_hud_fragment() -> (html, css) | None
+```
+
+The controller is constructed in `__init__.py` next to `reviewer_obj`, gated
+by a `misc.multiplayer` setting exactly like `misc.leaderboard` gates the
+leaderboard — when off (or credentials missing, or offline), the controller
+is inert and the publish call is a no-op.
+
+### Reviewer HUD
+
+`Reviewer_Manager.update_life_bar` (`src/Ankimon/pyobj/reviewer_obj.py:61`)
+rebuilds the full HUD every answer/question via the Shadow-DOM portal
+(`window.__ankimonHud.update(html, css)`), so the extension point is one
+call before the closing `</div>`:
+
+```python
+fragment = multiplayer.get_hud_fragment()   # cached state only, never blocks
+if fragment:
+    hud_html += fragment.html
+    hud_css += fragment.css
+```
+
+- **Raid:** a slim boss-HP bar (server HP % from the last flush/poll
+  response) + guild damage today. Renders from the controller's cached
+  state — a stale-by-30 s bar is fine; a blocked HUD render is not.
+- **PvP:** small token pips (2/3 charged) and a "turn ready" glow when a
+  round is waiting on the player.
+
+Updates land at the moments the HUD already refreshes
+(`reviewer_did_answer_card`, `reviewer_did_show_question`), so no new
+timers or repaints in the reviewer.
+
+### Notifications
+
+Reuse `tooltipWithColour`, which the battle loop already uses for damage
+numbers. The controller queues server-driven messages ("Boss at 40%!",
+"Rival committed their turn") and drains **at most one per answered card**,
+shown right after the local battle toasts. No modals, no sounds, no
+interruptions from the controller — ever. The existing move chooser dialog
+(`controls.allow_to_choose_moves`) stays a wild-battle-only feature.
+
+### Where PvP turns are played
+
+Not in the reviewer. Committing a PvP move is a deliberate act in the
+multiplayer window (a normal menu window via `create_menu_actions`, like the
+shop/pokedex). The reviewer only *signals* readiness via the HUD glow; if we
+later want one-click access, the established `pycmd(...)` reviewer-button
+bridge (`src/Ankimon/__init__.py:1007`, the Catch button) can open the
+multiplayer window after the current card — still never a dialog between
+question and answer.
+
+### Lifecycle
+
+- Flush the outbox on `profile_will_close` and `sync_did_finish` (both hooks
+  already used — `src/Ankimon/__init__.py:936`, `hooks.py`).
+- On profile open, the controller loads cached multiplayer state from disk
+  and schedules one background refresh — the reviewer never waits on it.
+
 ## Balancing
 
 The unit of power in Ankimon is the answered card, and player populations
