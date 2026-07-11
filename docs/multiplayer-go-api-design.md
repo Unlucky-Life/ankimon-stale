@@ -205,6 +205,53 @@ bridge (`src/Ankimon/__init__.py:1007`, the Catch button) can open the
 multiplayer window after the current card — still never a dialog between
 question and answer.
 
+### Further HUD / UI surfaces
+
+Every surface below already exists in the addon — multiplayer only feeds it
+data from the controller's cached state, so none of these add network calls
+or new render paths. Roughly in order of value-for-effort:
+
+1. **Deck browser / overview raid card.** `overview_team.py:350,365` already
+   injects the team grid into `deck_browser_will_render_content` and
+   `overview_will_render_content`. Add a compact raid card next to it: boss
+   sprite, HP bar, days remaining, "your guild dealt 12,400 today". This is
+   the *pull* that gets players into a review session — seen before
+   reviewing starts, zero impact during it. Same treatment for a pending
+   PvP turn ("Rival is waiting — 2 turn tokens ready").
+2. **Reviewer bottom-bar button.** The Catch button pattern
+   (`__init__.py:1007`, `pycmd('catch')` + linkHandler override) supports a
+   second button: `Raid 62%` (label updated from cached state on each HUD
+   refresh) that opens the multiplayer window. Gated by the existing
+   `reviewer_buttons` setting so minimalists keep a clean bar.
+3. **Discord Rich Presence.** `mw.ankimon_presence` (bundled pypresence,
+   `functions/discord_function.py`) already publishes review status on a
+   background thread. Extend the presence payload: "Raiding Articuno —
+   boss at 62%" or "In a ranked match, round 4". Free social proof and
+   recruitment for zero UI cost; respects the existing presence toggle.
+4. **Battle window raid tab.** `test_window` is the showcase view; give the
+   raid a panel there — big boss sprite (shiny/tier styling reuses existing
+   sprite plumbing), party list with contribution bars, countdown. This is
+   the "look at what we're doing together" screen; the reviewer HUD stays
+   minimal.
+5. **Session recap on `reviewer_will_end`.** The hook is already used
+   (`__init__.py:1066`). One toast — "Session: 214 raid dmg, 1 PvP token
+   earned" — as the player leaves the reviewer. Ends every session on a
+   visible multiplayer payoff without touching mid-review flow.
+6. **Trainer card + badges.** Add PvP rating / raid clears to the trainer
+   card, and mint raid/PvP achievements through the existing
+   `receive_badge` flow (`functions/badges_functions.py`) — first raid
+   joined, first boss cleared, first ranked win. Multiplayer progression
+   then shows up in the surfaces players already check.
+7. **Milestone sound cues.** Boss phase thresholds (75/50/25%) via
+   `play_effect_sound`, honoring `audio.battle_sounds`. At most one per
+   threshold per session — flavor, not noise.
+
+Deliberately *not* doing: countdown timers or animated tickers in the
+reviewer HUD (they pull attention during recall), unread-message counters,
+and anything that plays sounds or animations on *other players'* actions
+mid-review. Other people's progress renders on the next natural HUD refresh,
+silently.
+
 ### Lifecycle
 
 - Flush the outbox on `profile_will_close` and `sync_did_finish` (both hooks
