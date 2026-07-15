@@ -62,6 +62,8 @@ DEFAULT_CONFIG = {
     "misc.discord_rich_presence": False,
     "misc.discord_rich_presence_text": 1,
     "misc.developer_mode": False,
+    "multiplayer.enabled": False,
+    "multiplayer.api_url": "https://multiplayer-api.ankimon.com",
     "trainer.name": "Ash",
     "trainer.sprite": "ash",
     "trainer.id": 0,
