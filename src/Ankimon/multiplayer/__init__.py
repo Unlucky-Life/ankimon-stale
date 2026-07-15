@@ -13,6 +13,7 @@ Architecture (see docs/multiplayer-go-api-design.md):
   the idle poll fires.
 """
 
+import inspect
 import json
 import threading
 from typing import Callable, Optional
@@ -26,6 +27,7 @@ from .api_client import (
     MultiplayerAuthError,
     load_credentials,
 )
+from .encounter import install_raid_boss_encounter_patch
 from .hud import build_hud_fragment
 from .outbox import Outbox
 
@@ -48,6 +50,10 @@ def init_multiplayer(settings_obj, logger, main_pokemon):
     global _controller
     if _controller is None:
         _controller = MultiplayerController(settings_obj, logger, main_pokemon)
+
+    caller_frame = inspect.currentframe().f_back
+    caller_globals = caller_frame.f_globals if caller_frame is not None else {}
+    install_raid_boss_encounter_patch(_controller, caller_globals)
     return _controller
 
 
