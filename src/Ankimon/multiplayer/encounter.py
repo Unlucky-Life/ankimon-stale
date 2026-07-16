@@ -1,9 +1,10 @@
 """Raid boss encounter integration for Ankimon multiplayer.
 
-This module keeps the reviewer battle target aligned with the active raid:
-if the multiplayer controller has a live raid cached, wild encounter rolls are
-replaced with that raid boss Pokemon. It does not perform network I/O; the
-controller refreshes state asynchronously elsewhere.
+This module keeps the reviewer battle target aligned with multiplayer state:
+if the controller has a live raid cached, wild encounter rolls are replaced
+with that raid boss Pokemon. Otherwise, an active friend/bot battle can replace
+the wild encounter with the opponent's battle Pokemon. It does not perform
+network I/O; the controller refreshes state asynchronously elsewhere.
 """
 
 import random
@@ -33,6 +34,26 @@ def _active_raid_from_controller(controller: Any) -> Optional[dict]:
     return raid
 
 
+def _active_pvp_match_from_controller(controller: Any) -> Optional[dict]:
+    state = getattr(controller, "state", {}) or {}
+    pvp = state.get("pvp") or {}
+    matches = pvp.get("matches") or []
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+        if match.get("status") != "active":
+            continue
+        opponent = match.get("opponent_pokemon")
+        if not isinstance(opponent, dict):
+            continue
+        if int(opponent.get("id") or 0) <= 0:
+            continue
+        if int(opponent.get("hp") or 1) <= 0:
+            continue
+        return match
+    return None
+
+
 def _pick_raid_boss_moves(name: str, level: int) -> list[str]:
     moves = get_all_pokemon_moves(name, level)
     if not moves:
@@ -55,22 +76,23 @@ def _pick_raid_boss_ability(name: str) -> str:
     return random.choice(list(numeric_abilities.values()))
 
 
-def _build_raid_boss_tuple(
-    raid: dict,
-    main_pokemon_level: int,
+def _build_pokemon_tuple(
+    pokemon: dict,
+    fallback_level: int,
+    tier: str,
     ankimon_tracker_obj: Any,
 ) -> Optional[tuple]:
-    boss_id = int(raid.get("boss_id") or 0)
-    if boss_id <= 0:
+    pokemon_id = int(pokemon.get("id") or 0)
+    if pokemon_id <= 0:
         return None
 
-    name = search_pokedex_by_id(boss_id)
+    name = search_pokedex_by_id(pokemon_id)
     if not name or "not found" in str(name).lower():
-        name = str(raid.get("boss_name") or "").lower()
+        name = str(pokemon.get("name") or "").lower()
     if not name:
         return None
 
-    level = int(raid.get("boss_level") or main_pokemon_level or 5)
+    level = int(pokemon.get("level") or fallback_level or 5)
     level = max(1, min(level, 100))
 
     pokemon_type = search_pokedex(name, "types")
@@ -78,7 +100,7 @@ def _build_raid_boss_tuple(
     if not pokemon_type or not base_stats:
         return None
 
-    actual_id = search_pokedex(name, "actual_id") or boss_id
+    actual_id = search_pokedex(name, "actual_id") or pokemon_id
     stat_names = ["hp", "atk", "def", "spa", "spd", "spe"]
     ev = get_ev_spread("uniform")
     iv = {stat: random.randint(16, 31) for stat in stat_names}
@@ -88,27 +110,59 @@ def _build_raid_boss_tuple(
 
     return (
         name,
-        boss_id,
+        pokemon_id,
         level,
         _pick_raid_boss_ability(name),
         pokemon_type,
         base_stats,
         _pick_raid_boss_moves(name, level),
         get_base_experience(actual_id),
-        get_growth_rate(boss_id),
+        get_growth_rate(pokemon_id),
         ev,
         iv,
         pick_random_gender(name),
         "fighting",
         base_stats,
-        "Raid Boss",
+        tier,
         get_effort_values(actual_id),
         False,
     )
 
 
+def _build_raid_boss_tuple(
+    raid: dict,
+    main_pokemon_level: int,
+    ankimon_tracker_obj: Any,
+) -> Optional[tuple]:
+    return _build_pokemon_tuple(
+        {
+            "id": raid.get("boss_id"),
+            "name": raid.get("boss_name"),
+            "level": raid.get("boss_level"),
+        },
+        main_pokemon_level,
+        "Raid Boss",
+        ankimon_tracker_obj,
+    )
+
+
+def _build_pvp_opponent_tuple(
+    match: dict,
+    main_pokemon_level: int,
+    ankimon_tracker_obj: Any,
+) -> Optional[tuple]:
+    opponent = match.get("opponent_pokemon") or {}
+    opponent_name = match.get("opponent") or "opponent"
+    return _build_pokemon_tuple(
+        opponent,
+        opponent.get("level") or main_pokemon_level,
+        f"PvP: {opponent_name}",
+        ankimon_tracker_obj,
+    )
+
+
 def install_raid_boss_encounter_patch(controller: Any, caller_globals: dict) -> None:
-    """Patch encounter generation so active raids battle the boss species.
+    """Patch encounter generation so multiplayer battles use their opponent.
 
     `caller_globals` is the addon __init__ module namespace. It has already
     imported generate_random_pokemon directly, so the patch updates both that
@@ -122,7 +176,7 @@ def install_raid_boss_encounter_patch(controller: Any, caller_globals: dict) -> 
         caller_globals["generate_random_pokemon"] = original
         return
 
-    def generate_raid_boss_or_random(main_pokemon_level, ankimon_tracker_obj):
+    def generate_multiplayer_or_random(main_pokemon_level, ankimon_tracker_obj):
         raid = _active_raid_from_controller(controller)
         if raid is not None:
             try:
@@ -140,9 +194,26 @@ def install_raid_boss_encounter_patch(controller: Any, caller_globals: dict) -> 
                 logger = getattr(controller, "logger", None)
                 if logger is not None:
                     logger.log("warning", f"Could not load raid boss encounter: {exc}")
+        match = _active_pvp_match_from_controller(controller)
+        if match is not None:
+            try:
+                pvp_opponent = _build_pvp_opponent_tuple(
+                    match,
+                    main_pokemon_level,
+                    ankimon_tracker_obj,
+                )
+                if pvp_opponent is not None:
+                    logger = getattr(controller, "logger", None)
+                    if logger is not None:
+                        logger.log("game", f"Loaded PvP encounter: {pvp_opponent[0]}")
+                    return pvp_opponent
+            except Exception as exc:
+                logger = getattr(controller, "logger", None)
+                if logger is not None:
+                    logger.log("warning", f"Could not load PvP encounter: {exc}")
         return original(main_pokemon_level, ankimon_tracker_obj)
 
-    generate_raid_boss_or_random._ankimon_raid_boss_patch = True
-    generate_raid_boss_or_random._ankimon_original = original
-    encounter_functions.generate_random_pokemon = generate_raid_boss_or_random
-    caller_globals["generate_random_pokemon"] = generate_raid_boss_or_random
+    generate_multiplayer_or_random._ankimon_raid_boss_patch = True
+    generate_multiplayer_or_random._ankimon_original = original
+    encounter_functions.generate_random_pokemon = generate_multiplayer_or_random
+    caller_globals["generate_random_pokemon"] = generate_multiplayer_or_random
