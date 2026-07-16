@@ -3,7 +3,7 @@
 Opened from the Ankimon menu. All server calls go through
 MultiplayerController.run_action (background thread + main-thread callback),
 so the dialog never freezes the UI. This is also where PvP moves are
-committed — deliberately outside the reviewer.
+committed, deliberately outside the reviewer.
 """
 
 from typing import Optional
@@ -25,8 +25,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .api_client import load_credentials
 from . import get_controller
+from .api_client import load_credentials
 
 _window = None
 
@@ -41,6 +41,7 @@ def open_multiplayer_window():
     if _window is None:
         _window = MultiplayerWindow(controller)
     _window.refresh_from_state()
+    _window.check_server_health()
     _window.show()
     _window.raise_()
     _window.activateWindow()
@@ -51,10 +52,11 @@ class MultiplayerWindow(QDialog):
         super().__init__()
         self.controller = controller
         self.setWindowTitle("Ankimon Multiplayer")
-        self.resize(460, 520)
+        self.resize(540, 640)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_connection_group())
+        layout.addWidget(self._build_demo_group())
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_raid_tab(), "Raid Boss")
@@ -78,6 +80,15 @@ class MultiplayerWindow(QDialog):
         self.enabled_checkbox.toggled.connect(self._on_enabled_toggled)
         layout.addWidget(self.enabled_checkbox)
 
+        status_row = QHBoxLayout()
+        status_row.addWidget(QLabel("Status:"))
+        self.health_label = QLabel("Checking...")
+        status_row.addWidget(self.health_label, stretch=1)
+        health_button = QPushButton("Check")
+        health_button.clicked.connect(self.check_server_health)
+        status_row.addWidget(health_button)
+        layout.addLayout(status_row)
+
         url_row = QHBoxLayout()
         url_row.addWidget(QLabel("Server:"))
         self.url_input = QLineEdit(
@@ -90,13 +101,36 @@ class MultiplayerWindow(QDialog):
 
         credentials_row = QHBoxLayout()
         self.credentials_label = QLabel()
-        credentials_row.addWidget(self.credentials_label)
-        credentials_button = QPushButton("Set credentials…")
+        credentials_row.addWidget(self.credentials_label, stretch=1)
+        credentials_button = QPushButton("Set credentials")
         credentials_button.clicked.connect(self._on_set_credentials)
         credentials_row.addWidget(credentials_button)
+        guest_button = QPushButton("Use guest")
+        guest_button.clicked.connect(self._on_create_guest)
+        credentials_row.addWidget(guest_button)
         layout.addLayout(credentials_row)
 
         self._update_credentials_label()
+        return group
+
+    def _build_demo_group(self) -> QGroupBox:
+        group = QGroupBox("Test tools")
+        layout = QVBoxLayout(group)
+
+        self.demo_label = QLabel(
+            "Use these to verify server connection, raids, and bot battles."
+        )
+        layout.addWidget(self.demo_label)
+
+        buttons_row = QHBoxLayout()
+        demo_button = QPushButton("Create test raid + bot")
+        demo_button.clicked.connect(self._on_setup_demo)
+        buttons_row.addWidget(demo_button)
+        challenge_button = QPushButton("Challenge test bot")
+        challenge_button.clicked.connect(self._on_challenge_test_bot)
+        buttons_row.addWidget(challenge_button)
+        layout.addLayout(buttons_row)
+
         return group
 
     def _update_credentials_label(self):
@@ -113,9 +147,9 @@ class MultiplayerWindow(QDialog):
     def _on_url_changed(self):
         self.controller.settings.set("multiplayer.api_url", self.url_input.text().strip())
         self.controller.reset_auth()
+        self.check_server_health()
 
     def _on_set_credentials(self):
-        # Same credentials file and dialog as the leaderboard: sign in once.
         from ..pyobj.ankimon_leaderboard import ApiKeyDialog
 
         dialog = ApiKeyDialog()
@@ -123,7 +157,50 @@ class MultiplayerWindow(QDialog):
         self.controller.reset_auth()
         self._update_credentials_label()
 
-    # --- Raid tab -----------------------------------------------------------
+    def check_server_health(self):
+        self.health_label.setText("Checking...")
+
+        def on_done(_result, error):
+            if error is not None:
+                self.health_label.setText("Offline")
+                tooltip("Multiplayer server is offline or unreachable.")
+                return
+            self.health_label.setText("Online")
+
+        self.controller.run_action(lambda: self.controller.api.check_health(), on_done)
+
+    def _on_create_guest(self):
+        tooltip("Creating guest...")
+
+        def on_done(result, error):
+            if error is not None:
+                showInfo(f"Could not create guest:\n{error}")
+                return
+            state = (result or {}).get("state")
+            if isinstance(state, dict):
+                self.controller._apply_state(state)
+            self.controller.reset_auth()
+            self.controller.settings.set("multiplayer.enabled", True)
+            self.enabled_checkbox.setChecked(True)
+            self._update_credentials_label()
+            self.refresh_from_state()
+            tooltip("Guest ready.")
+
+        self.controller.run_action(lambda: self.controller.api.create_guest(), on_done)
+
+    def _on_setup_demo(self):
+        self._run_demo_action(
+            "Creating test raid and bot friend...",
+            lambda: self.controller.api.setup_demo(),
+        )
+
+    def _on_challenge_test_bot(self):
+        self._run(
+            "Challenging test bot...",
+            lambda: self.controller.api.challenge_friend("bot:ankimon-test"),
+        )
+
+    # --- Raid tab ---------------------------------------------------------
 
     def _build_raid_tab(self):
         tab = QGroupBox()
@@ -166,14 +243,14 @@ class MultiplayerWindow(QDialog):
         return tab
 
     def _on_create_raid(self):
-        self._run("Creating raid…", lambda: self.controller.api.create_raid())
+        self._run("Creating raid...", lambda: self.controller.api.create_raid())
 
     def _on_join_raid(self):
         code = self.raid_code_input.text().strip()
         if not code:
             tooltip("Enter a raid code first.")
             return
-        self._run("Joining raid…", lambda: self.controller.api.join_raid(code))
+        self._run("Joining raid...", lambda: self.controller.api.join_raid(code))
 
     def _on_leave_raid(self):
         raid = self.controller.state.get("raid") or {}
@@ -181,9 +258,9 @@ class MultiplayerWindow(QDialog):
         if not code:
             tooltip("You are not in a raid.")
             return
-        self._run("Leaving raid…", lambda: self.controller.api.leave_raid(code))
+        self._run("Leaving raid...", lambda: self.controller.api.leave_raid(code))
 
-    # --- Friend battles tab -----------------------------------------------
+    # --- Friend battles tab ----------------------------------------------
 
     def _build_pvp_tab(self):
         tab = QGroupBox()
@@ -197,6 +274,21 @@ class MultiplayerWindow(QDialog):
         challenge_button.clicked.connect(self._on_challenge)
         challenge_row.addWidget(challenge_button)
         layout.addLayout(challenge_row)
+
+        friend_row = QHBoxLayout()
+        friend_row.addWidget(QLabel("Friends:"))
+        self.friend_list = QListWidget()
+        self.friend_list.setMaximumHeight(90)
+        friend_row.addWidget(self.friend_list, stretch=1)
+        friend_buttons = QVBoxLayout()
+        add_test_friend_button = QPushButton("Add test bot")
+        add_test_friend_button.clicked.connect(self._on_add_test_bot_friend)
+        friend_buttons.addWidget(add_test_friend_button)
+        challenge_selected_button = QPushButton("Challenge selected")
+        challenge_selected_button.clicked.connect(self._on_challenge_selected_friend)
+        friend_buttons.addWidget(challenge_selected_button)
+        friend_row.addLayout(friend_buttons)
+        layout.addLayout(friend_row)
 
         self.tokens_label = QLabel("Turn tokens: 0 / 3")
         layout.addWidget(self.tokens_label)
@@ -232,7 +324,30 @@ class MultiplayerWindow(QDialog):
         item = self.match_list.currentItem()
         if item is None:
             return None
-        return item.data(0x0100)  # Qt.ItemDataRole.UserRole
+        return item.data(0x0100)
+
+    def _selected_friend(self) -> Optional[dict]:
+        item = self.friend_list.currentItem()
+        if item is None:
+            return None
+        return item.data(0x0100)
+
+    def _on_add_test_bot_friend(self):
+        self._run("Adding test bot friend...", lambda: self.controller.api.add_friend("bot"))
+
+    def _on_challenge_selected_friend(self):
+        friend = self._selected_friend()
+        if not friend:
+            tooltip("Select a friend first.")
+            return
+        opponent = friend.get("challenge_value") or friend.get("raw_username") or friend.get("username")
+        if not opponent:
+            tooltip("Selected friend cannot be challenged.")
+            return
+        self._run(
+            f"Challenging {friend.get('username', opponent)}...",
+            lambda: self.controller.api.challenge_friend(opponent),
+        )
 
     def _on_challenge(self):
         opponent = self.challenge_input.text().strip()
@@ -240,7 +355,7 @@ class MultiplayerWindow(QDialog):
             tooltip("Enter a username to challenge.")
             return
         self._run(
-            f"Challenging {opponent}…",
+            f"Challenging {opponent}...",
             lambda: self.controller.api.challenge_friend(opponent),
         )
 
@@ -250,7 +365,7 @@ class MultiplayerWindow(QDialog):
             tooltip("Select an incoming challenge first.")
             return
         self._run(
-            "Sending response…",
+            "Sending response...",
             lambda: self.controller.api.respond_to_challenge(match["id"], accept),
         )
 
@@ -264,18 +379,18 @@ class MultiplayerWindow(QDialog):
             return
         tokens = (self.controller.state.get("pvp") or {}).get("tokens", 0)
         if tokens < 1:
-            tooltip("No turn tokens — answer more cards to charge one!")
+            tooltip("No turn tokens - answer more cards to charge one!")
             return
         move = self.move_combo.currentText()
         if not move:
-            tooltip("Your Pokémon has no moves to use.")
+            tooltip("Your Pokemon has no moves to use.")
             return
         self._run(
-            f"Committing {move}…",
+            f"Committing {move}...",
             lambda: self.controller.api.submit_turn(match["id"], move),
         )
 
-    # --- Shared plumbing -----------------------------------------------------
+    # --- Shared plumbing --------------------------------------------------
 
     def _run(self, busy_message: str, task):
         """Run an API action in the background and refresh on completion."""
@@ -291,6 +406,26 @@ class MultiplayerWindow(QDialog):
             if error is not None:
                 showInfo(f"Multiplayer request failed:\n{error}")
                 return
+            self.refresh_from_server()
+
+        self.controller.run_action(task, on_done)
+
+    def _run_demo_action(self, busy_message: str, task):
+        if not self.controller.enabled:
+            showInfo("Create a guest or set credentials first, then enable multiplayer.")
+            return
+        tooltip(busy_message)
+
+        def on_done(result, error):
+            if error is not None:
+                showInfo(f"Multiplayer request failed:\n{error}")
+                return
+            state = (result or {}).get("state")
+            if isinstance(state, dict):
+                self.controller._apply_state(state)
+            demo = (result or {}).get("demo") or {}
+            if demo.get("raid_code"):
+                tooltip(f"Test raid ready: {demo['raid_code']}")
             self.refresh_from_state()
 
         self.controller.run_action(task, on_done)
@@ -308,9 +443,9 @@ class MultiplayerWindow(QDialog):
             self.raid_bar.setValue(pct)
             info = f"Raid code: {raid.get('code', '?')}"
             if raid.get("ends_at"):
-                info += f"  •  Ends: {raid['ends_at']}"
+                info += f" - Ends: {raid['ends_at']}"
             if raid.get("your_damage_today") is not None:
-                info += f"  •  Your damage today: {raid['your_damage_today']}"
+                info += f" - Your damage today: {raid['your_damage_today']}"
             self.raid_info.setText(info)
         else:
             self.raid_title.setText("No active raid")
@@ -320,25 +455,33 @@ class MultiplayerWindow(QDialog):
         self.raid_party_list.clear()
         for member in raid.get("party", []):
             self.raid_party_list.addItem(
-                f"{member.get('username', '?')} — {member.get('damage', 0)} dmg"
+                f"{member.get('username', '?')} - {member.get('damage', 0)} dmg"
             )
 
         pvp = state.get("pvp") or {}
         self.tokens_label.setText(f"Turn tokens: {pvp.get('tokens', 0)} / 3")
+
+        self.friend_list.clear()
+        for friend in state.get("friends", []):
+            name = friend.get("username", "?")
+            suffix = " (bot)" if friend.get("bot") else ""
+            item = QListWidgetItem(f"{name}{suffix}")
+            item.setData(0x0100, friend)
+            self.friend_list.addItem(item)
 
         self.match_list.clear()
         for match in pvp.get("matches", []):
             opponent = match.get("opponent", "?")
             status = match.get("status", "?")
             if match.get("incoming_challenge"):
-                text = f"⚔ {opponent} challenged you!"
+                text = f"{opponent} challenged you!"
             elif status == "active":
                 round_no = match.get("round", 1)
-                you = "✓" if match.get("your_move_committed") else "…"
-                them = "✓" if match.get("opponent_move_committed") else "…"
-                text = f"{opponent} — round {round_no} (you {you} / them {them})"
+                you = "yes" if match.get("your_move_committed") else "no"
+                them = "yes" if match.get("opponent_move_committed") else "no"
+                text = f"{opponent} - round {round_no} (you {you} / them {them})"
             else:
-                text = f"{opponent} — {status}"
+                text = f"{opponent} - {status}"
             item = QListWidgetItem(text)
             item.setData(0x0100, match)
             self.match_list.addItem(item)
