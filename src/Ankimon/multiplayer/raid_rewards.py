@@ -121,4 +121,4 @@ def claim_raid_reward(reward: dict) -> Optional[str]:
     save_caught_pokemon(pokemon, pokemon.name, None)
     claimed.add(reward_id)
     _save_claimed_reward_ids(claimed)
-    return f"{pokemon.name} joined your team as a raid reward!"
+    return f"Raid cleared! {pokemon.name} was caught at Lv. {pokemon.level}."
