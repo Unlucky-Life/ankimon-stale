@@ -7,11 +7,39 @@ controller's cached state — building this fragment must never block.
 
 from typing import Optional, Tuple
 
+from ..business import get_image_as_base64
+from ..functions.sprite_functions import get_sprite_path
+
 MAX_TOKENS = 3
+
+
+def _raid_boss_sprite_html(raid: dict) -> str:
+    boss_id = int(raid.get("boss_id") or 0)
+    if boss_id <= 0:
+        return ""
+    try:
+        sprite_path = get_sprite_path("front", "png", boss_id, False, "M")
+        image_base64 = get_image_as_base64(sprite_path)
+    except Exception:
+        return ""
+    if not image_base64:
+        return ""
+    boss = raid.get("boss_name", "Raid boss")
+    return (
+        '<div id="ankimon-mp-raid-sprite">'
+        f'<img src="data:image/png;base64,{image_base64}" alt="{boss}">'
+        "</div>"
+    )
 
 
 def build_hud_fragment(state: dict) -> Optional[Tuple[str, str]]:
     raid = state.get("raid") or {}
+    if raid and (
+        raid.get("defeated")
+        or raid.get("ended")
+        or int(raid.get("boss_hp") or 0) <= 0
+    ):
+        raid = {}
     pvp = state.get("pvp") or {}
     matches = pvp.get("matches", [])
     active_matches = [m for m in matches if m.get("status") == "active"]
@@ -26,10 +54,12 @@ def build_hud_fragment(state: dict) -> Optional[Tuple[str, str]]:
         boss = raid.get("boss_name", "Raid boss")
         html_parts.append(
             '<div id="ankimon-mp-raid">'
+            f"{_raid_boss_sprite_html(raid)}"
+            '<div id="ankimon-mp-raid-meta">'
             f'<span id="ankimon-mp-raid-label">RAID {boss} {int(pct)}%</span>'
             '<div id="ankimon-mp-raid-track">'
             f'<div id="ankimon-mp-raid-fill" style="width:{pct:.1f}%"></div>'
-            "</div></div>"
+            "</div></div></div>"
         )
 
     if active_matches:
@@ -59,7 +89,21 @@ def build_hud_fragment(state: dict) -> Optional[Tuple[str, str]]:
     }
     #ankimon-hud #ankimon-mp-raid {
         background: rgba(31,31,31,0.75); color: #fff;
-        border-radius: 5px; padding: 3px 6px; min-width: 140px;
+        border-radius: 5px; padding: 4px 6px; min-width: 160px;
+        display: flex; align-items: center; gap: 6px;
+    }
+    #ankimon-hud #ankimon-mp-raid-sprite {
+        width: 38px; height: 38px; flex: 0 0 38px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    #ankimon-hud #ankimon-mp-raid-sprite img {
+        max-width: 38px; max-height: 38px; image-rendering: auto;
+    }
+    #ankimon-hud #ankimon-mp-raid-meta {
+        min-width: 0; flex: 1;
+    }
+    #ankimon-hud #ankimon-mp-raid-label {
+        display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     #ankimon-hud #ankimon-mp-raid-track {
         height: 5px; border-radius: 3px; background: rgba(255,255,255,0.25);
