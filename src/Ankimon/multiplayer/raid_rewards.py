@@ -15,7 +15,7 @@ from ..functions.pokedex_functions import (
 )
 from ..functions.pokemon_functions import pick_random_gender
 from ..pyobj.pokemon_obj import PokemonObject
-from ..resources import mypokemon_path, user_path
+from ..resources import user_path
 from ..utils import get_ev_spread
 
 CLAIMED_REWARDS_PATH = user_path / "multiplayer_claimed_raid_rewards.json"
@@ -101,46 +101,6 @@ def _build_reward_pokemon(reward: dict) -> Optional[PokemonObject]:
     )
 
 
-def _save_reward_pokemon(pokemon: PokemonObject) -> None:
-    caught_pokemon = {
-        "name": pokemon.name.capitalize(),
-        "nickname": "",
-        "level": pokemon.level,
-        "gender": pokemon.gender,
-        "id": pokemon.id,
-        "ability": pokemon.ability,
-        "type": pokemon.type,
-        "stats": pokemon.base_stats,
-        "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
-        "iv": pokemon.iv,
-        "attacks": pokemon.attacks,
-        "base_experience": pokemon.base_experience,
-        "current_hp": pokemon.calculate_max_hp(),
-        "growth_rate": pokemon.growth_rate,
-        "friendship": 0,
-        "pokemon_defeated": 0,
-        "xp": 0,
-        "everstone": False,
-        "shiny": pokemon.shiny,
-        "captured_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "individual_id": pokemon.individual_id,
-        "mega": False,
-        "special_form": None,
-        "tier": pokemon.tier,
-        "is_favorite": False,
-        "held_item": None,
-    }
-
-    if mypokemon_path.is_file():
-        with open(mypokemon_path, "r", encoding="utf-8") as json_file:
-            caught_pokemon_data = json.load(json_file)
-    else:
-        caught_pokemon_data = []
-    caught_pokemon_data.append(caught_pokemon)
-    with open(str(mypokemon_path), "w", encoding="utf-8") as json_file:
-        json.dump(caught_pokemon_data, json_file, indent=2)
-
-
 def claim_raid_reward(reward: dict) -> Optional[str]:
     if not isinstance(reward, dict):
         return None
@@ -156,7 +116,9 @@ def claim_raid_reward(reward: dict) -> Optional[str]:
     if pokemon is None:
         return None
 
-    _save_reward_pokemon(pokemon)
+    from ..functions.encounter_functions import save_caught_pokemon
+
+    save_caught_pokemon(pokemon, pokemon.name, None)
     claimed.add(reward_id)
     _save_claimed_reward_ids(claimed)
     return f"{pokemon.name} joined your team as a raid reward!"
