@@ -30,6 +30,7 @@ from .api_client import (
 from .encounter import install_raid_boss_encounter_patch
 from .hud import build_hud_fragment
 from .outbox import Outbox
+from .raid_rewards import claim_raid_reward
 
 STATE_PATH = user_path / "multiplayer_state.json"
 
@@ -264,13 +265,23 @@ class MultiplayerController:
             return
         old_state = self.state
         merged = dict(old_state)
-        for key in ("raid", "pvp"):
+        for key in ("raid", "raid_reward", "pvp"):
             if key in new_state:
                 merged[key] = new_state[key]
         self._derive_toasts(old_state, merged)
+        self._claim_raid_reward(merged.get("raid_reward"))
         self.state = merged
         self._seconds_since_sync = 0
         self._save_state()
+
+    def _claim_raid_reward(self, reward):
+        try:
+            message = claim_raid_reward(reward)
+        except Exception as exc:
+            self.logger.log("warning", f"Could not claim raid reward: {exc}")
+            return
+        if message:
+            self._queue_toast(message)
 
     def _derive_toasts(self, old_state: dict, new_state: dict):
         old_raid = old_state.get("raid") or {}
