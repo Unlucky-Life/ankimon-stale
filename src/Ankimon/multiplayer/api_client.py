@@ -44,6 +44,13 @@ def load_credentials() -> Optional[dict]:
     return None
 
 
+def save_credentials(username: str, api_key: str) -> None:
+    """Persist multiplayer credentials in the existing leaderboard file."""
+    credentials = {"username": username, "api_key": api_key}
+    with open(user_path_credentials, "w", encoding="utf-8") as f:
+        json.dump(credentials, f, indent=2)
+
+
 class MultiplayerApiClient:
     def __init__(self, settings_obj):
         self.settings = settings_obj
@@ -53,6 +60,34 @@ class MultiplayerApiClient:
     def base_url(self) -> str:
         url = self.settings.get("multiplayer.api_url", DEFAULT_API_URL) or DEFAULT_API_URL
         return f"{url.rstrip('/')}/{API_VERSION}"
+
+    @property
+    def root_url(self) -> str:
+        url = self.settings.get("multiplayer.api_url", DEFAULT_API_URL) or DEFAULT_API_URL
+        return url.rstrip("/")
+
+    def _request_no_auth(self, method: str, path: str, payload: Optional[dict] = None) -> dict:
+        try:
+            response = self.session.request(
+                method,
+                f"{self.root_url}{path}",
+                json=payload,
+                timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
+            )
+        except requests.exceptions.RequestException as e:
+            raise MultiplayerApiError(f"Request failed: {e}") from e
+
+        if response.status_code >= 400:
+            raise MultiplayerApiError(
+                f"{method} {path} failed with status {response.status_code}"
+            )
+        content_type = response.headers.get("Content-Type", "")
+        if "application/json" not in content_type:
+            return {"ok": True, "body": response.text.strip()}
+        try:
+            return response.json() if response.content else {}
+        except ValueError as e:
+            raise MultiplayerApiError("Server returned invalid JSON.") from e
 
     def _request(self, method: str, path: str, payload: Optional[dict] = None,
                  idempotency_key: Optional[str] = None) -> dict:
@@ -107,6 +142,19 @@ class MultiplayerApiClient:
         """Fetch the caller's multiplayer state (raid + matches) directly."""
         return self._request("GET", "/state")
 
+    def check_health(self) -> dict:
+        """Check server reachability without requiring credentials."""
+        return self._request_no_auth("GET", "/healthz")
+
+    def create_guest(self) -> dict:
+        payload = self._request_no_auth("POST", f"/{API_VERSION}/guests")
+        if payload.get("username") and payload.get("api_key"):
+            save_credentials(payload["username"], payload["api_key"])
+        return payload
+
+    def setup_demo(self) -> dict:
+        return self._request("POST", "/demo/setup")
+
     # --- Raids ------------------------------------------------------------
 
     def create_raid(self, target_days: int = 5) -> dict:
@@ -119,6 +167,9 @@ class MultiplayerApiClient:
         return self._request("POST", f"/raids/{raid_code}/leave")
 
     # --- Friend battles ---------------------------------------------------
+
+    def add_friend(self, username: str) -> dict:
+        return self._request("POST", "/friends", payload={"username": username})
 
     def challenge_friend(self, opponent_username: str) -> dict:
         return self._request(
