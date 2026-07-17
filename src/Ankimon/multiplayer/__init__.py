@@ -16,6 +16,7 @@ Architecture (see docs/multiplayer-go-api-design.md):
 import inspect
 import json
 import threading
+import time
 from typing import Callable, Optional
 
 from aqt import gui_hooks, mw
@@ -30,7 +31,7 @@ from .api_client import (
 from .encounter import install_raid_boss_encounter_patch
 from .hud import build_hud_fragment
 from .outbox import Outbox
-from .raid_rewards import claim_raid_reward
+from .raid_rewards import claim_raid_reward, is_raid_reward_claimed, reward_id_for
 
 STATE_PATH = user_path / "multiplayer_state.json"
 
@@ -40,6 +41,7 @@ ACTIVE_POLL_SECONDS = 30
 IDLE_POLL_SECONDS = 300
 
 CARDS_PER_TOKEN = 10
+RAID_VICTORY_DISPLAY_SECONDS = 180
 
 BOSS_TOAST_THRESHOLDS = (75, 50, 25)
 
@@ -269,19 +271,49 @@ class MultiplayerController:
             if key in new_state:
                 merged[key] = new_state[key]
         self._derive_toasts(old_state, merged)
-        self._claim_raid_reward(merged.get("raid_reward"))
+        self._claim_raid_reward(merged)
+        self._prune_raid_victory(merged)
         self.state = merged
         self._seconds_since_sync = 0
         self._save_state()
 
-    def _claim_raid_reward(self, reward):
+    def _claim_raid_reward(self, state: dict):
+        reward = state.get("raid_reward")
+        if not isinstance(reward, dict):
+            return
+        reward_id = reward_id_for(reward)
+        if not reward_id:
+            return
+        if is_raid_reward_claimed(reward):
+            return
         try:
             message = claim_raid_reward(reward)
         except Exception as exc:
             self.logger.log("warning", f"Could not claim raid reward: {exc}")
             return
         if message:
+            state["raid_victory"] = self._build_raid_victory(reward)
             self._queue_toast(message)
+
+    def _build_raid_victory(self, reward: dict) -> dict:
+        victory = dict(reward)
+        victory["shown_until"] = time.time() + RAID_VICTORY_DISPLAY_SECONDS
+        return victory
+
+    def _build_raid_clear_victory(self, raid: dict) -> dict:
+        return {
+            "boss_name": raid.get("boss_name", "Raid boss"),
+            "boss_id": raid.get("boss_id", 0),
+            "level": raid.get("reward_level", 0),
+            "reward_winner": raid.get("reward_winner", ""),
+            "shown_until": time.time() + RAID_VICTORY_DISPLAY_SECONDS,
+        }
+
+    def _prune_raid_victory(self, state: dict):
+        victory = state.get("raid_victory")
+        if isinstance(victory, dict) and victory.get("shown_until", 0) > time.time():
+            return
+        state.pop("raid_victory", None)
 
     def _derive_toasts(self, old_state: dict, new_state: dict):
         old_raid = old_state.get("raid") or {}
@@ -295,7 +327,15 @@ class MultiplayerController:
             )
             boss = new_raid.get("boss_name", "The raid boss")
             if new_raid.get("boss_hp", 1) <= 0 < old_raid.get("boss_hp", 1):
-                self._queue_toast(f"{boss} was defeated! Claim your raid reward.")
+                reward = new_state.get("raid_reward")
+                winner = new_raid.get("reward_winner")
+                if isinstance(reward, dict):
+                    self._queue_toast(f"{boss} was defeated!")
+                elif winner:
+                    new_state["raid_victory"] = self._build_raid_clear_victory(new_raid)
+                    self._queue_toast(f"{boss} was defeated! Reward went to {winner}.")
+                else:
+                    self._queue_toast(f"{boss} was defeated!")
             else:
                 for threshold in BOSS_TOAST_THRESHOLDS:
                     if new_pct <= threshold < old_pct:

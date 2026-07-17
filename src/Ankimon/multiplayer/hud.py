@@ -6,6 +6,7 @@ controller's cached state — building this fragment must never block.
 """
 
 from html import escape
+import time
 from typing import Optional, Tuple
 
 from ..business import get_image_as_base64
@@ -50,7 +51,9 @@ def build_hud_fragment(state: dict) -> Optional[Tuple[str, str]]:
     ):
         raid = {}
     pvp = state.get("pvp") or {}
-    reward = state.get("raid_reward") or {}
+    reward = state.get("raid_victory") or {}
+    if reward and reward.get("shown_until", 0) <= time.time():
+        reward = {}
     matches = pvp.get("matches", [])
     active_matches = [m for m in matches if m.get("status") == "active"]
 
@@ -62,19 +65,26 @@ def build_hud_fragment(state: dict) -> Optional[Tuple[str, str]]:
     if reward:
         boss = escape(str(reward.get("boss_name") or "Raid boss"))
         level = int(reward.get("level") or 0)
+        winner = escape(str(reward.get("reward_winner") or ""))
         sprite = _pokemon_sprite_html(
             int(reward.get("boss_id") or 0),
             boss,
             "ankimon-mp-reward-sprite",
         )
         level_text = f"Lv. {level}" if level else "Reward"
+        if winner and not reward.get("id"):
+            detail_text = f"Reward to {winner}"
+            if level:
+                detail_text += f" at {level_text}"
+        else:
+            detail_text = f"Caught {level_text}"
         html_parts.append(
             '<div id="ankimon-mp-reward">'
             f"{sprite}"
             '<div id="ankimon-mp-reward-meta">'
             '<span id="ankimon-mp-reward-kicker">RAID CLEARED</span>'
             f'<strong id="ankimon-mp-reward-name">{boss}</strong>'
-            f'<span id="ankimon-mp-reward-detail">Caught {level_text}</span>'
+            f'<span id="ankimon-mp-reward-detail">{detail_text}</span>'
             "</div></div>"
         )
 

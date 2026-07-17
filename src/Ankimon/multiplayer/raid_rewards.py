@@ -37,6 +37,17 @@ def _save_claimed_reward_ids(reward_ids: set[str]) -> None:
         json.dump(sorted(reward_ids), f, indent=2)
 
 
+def reward_id_for(reward: dict) -> str:
+    if not isinstance(reward, dict):
+        return ""
+    return str(reward.get("id") or "")
+
+
+def is_raid_reward_claimed(reward: dict) -> bool:
+    reward_id = reward_id_for(reward)
+    return bool(reward_id and reward_id in _load_claimed_reward_ids())
+
+
 def _pick_moves(name: str, level: int) -> list[str]:
     moves = get_all_pokemon_moves(name, level)
     if not moves:
@@ -104,7 +115,7 @@ def _build_reward_pokemon(reward: dict) -> Optional[PokemonObject]:
 def claim_raid_reward(reward: dict) -> Optional[str]:
     if not isinstance(reward, dict):
         return None
-    reward_id = str(reward.get("id") or "")
+    reward_id = reward_id_for(reward)
     if not reward_id:
         return None
 

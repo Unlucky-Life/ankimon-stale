@@ -439,13 +439,29 @@ class MultiplayerWindow(QDialog):
         raid = state.get("raid") or {}
         if raid.get("boss_max_hp"):
             pct = max(0, min(100, int(100 * raid.get("boss_hp", 0) / raid["boss_max_hp"])))
-            self.raid_title.setText(f"{raid.get('boss_name', 'Raid boss')}")
+            boss_name = raid.get("boss_name", "Raid boss")
+            if raid.get("defeated"):
+                self.raid_title.setText(f"Raid cleared: {boss_name}")
+            else:
+                self.raid_title.setText(f"{boss_name}")
             self.raid_bar.setValue(pct)
             info = f"Raid code: {raid.get('code', '?')}"
             if raid.get("ends_at"):
                 info += f" - Ends: {raid['ends_at']}"
             if raid.get("your_damage_today") is not None:
                 info += f" - Your damage today: {raid['your_damage_today']}"
+            if raid.get("defeated"):
+                winner = raid.get("reward_winner")
+                level = raid.get("reward_level")
+                reward = state.get("raid_reward") or {}
+                credentials = load_credentials() or {}
+                if reward:
+                    info += f" - Reward caught at Lv. {reward.get('level', level)}"
+                elif winner:
+                    you_marker = "you" if winner == credentials.get("username") else winner
+                    info += f" - Reward went to {you_marker}"
+                    if level:
+                        info += f" at Lv. {level}"
             self.raid_info.setText(info)
         else:
             self.raid_title.setText("No active raid")
