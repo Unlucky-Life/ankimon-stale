@@ -470,8 +470,15 @@ class MultiplayerWindow(QDialog):
         self.friend_list.clear()
         for friend in state.get("friends", []):
             name = friend.get("username", "?")
-            suffix = " (bot)" if friend.get("bot") else ""
-            item = QListWidgetItem(f"{name}{suffix}")
+            presence = "online" if friend.get("online") else "offline"
+            dot = "●" if friend.get("online") else "○"
+            details = []
+            if friend.get("bot"):
+                details.append("bot")
+            if friend.get("in_raid"):
+                details.append("in raid")
+            suffix = f" ({', '.join(details)})" if details else ""
+            item = QListWidgetItem(f"{dot} {name} - {presence}{suffix}")
             item.setData(0x0100, friend)
             self.friend_list.addItem(item)
 
