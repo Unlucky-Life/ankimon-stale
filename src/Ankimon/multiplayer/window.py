@@ -122,10 +122,10 @@ class MultiplayerWindow(QDialog):
         layout.addWidget(self.demo_label)
 
         buttons_row = QHBoxLayout()
-        demo_button = QPushButton("Create test raid + bot")
+        demo_button = QPushButton("Create test raid + bots")
         demo_button.clicked.connect(self._on_setup_demo)
         buttons_row.addWidget(demo_button)
-        challenge_button = QPushButton("Challenge test bot")
+        challenge_button = QPushButton("Challenge Ankimon Test")
         challenge_button.clicked.connect(self._on_challenge_test_bot)
         buttons_row.addWidget(challenge_button)
         layout.addLayout(buttons_row)
@@ -280,7 +280,7 @@ class MultiplayerWindow(QDialog):
         self.friend_list.setMaximumHeight(90)
         friend_row.addWidget(self.friend_list, stretch=1)
         friend_buttons = QVBoxLayout()
-        add_test_friend_button = QPushButton("Add test bot")
+        add_test_friend_button = QPushButton("Add Ankimon Test")
         add_test_friend_button.clicked.connect(self._on_add_test_bot_friend)
         friend_buttons.addWidget(add_test_friend_button)
         challenge_selected_button = QPushButton("Challenge selected")
@@ -469,12 +469,19 @@ class MultiplayerWindow(QDialog):
 
         self.friend_list.clear()
         for friend in state.get("friends", []):
-            name = friend.get("username", "?")
+            name = friend.get("display_name") or friend.get("username", "?")
             presence = "online" if friend.get("online") else "offline"
-            dot = "●" if friend.get("online") else "○"
+            dot = "[online]" if friend.get("online") else "[offline]"
             details = []
             if friend.get("bot"):
                 details.append("bot")
+                pokemon = friend.get("pokemon") or {}
+                strategy = friend.get("strategy")
+                pokemon_name = pokemon.get("name")
+                if strategy:
+                    details.append(strategy)
+                if pokemon_name:
+                    details.append(pokemon_name)
             if friend.get("in_raid"):
                 details.append("in raid")
             suffix = f" ({', '.join(details)})" if details else ""
