@@ -13,6 +13,7 @@ from typing import Optional
 import requests
 
 from ..resources import user_path_credentials
+from .team import current_player_team_summary
 
 DEFAULT_API_URL = "https://multiplayer-api.ankimon.com"
 API_VERSION = "v1"
@@ -172,8 +173,12 @@ class MultiplayerApiClient:
         return self._request("POST", "/friends", payload={"username": username})
 
     def challenge_friend(self, opponent_username: str) -> dict:
+        payload = {"opponent": opponent_username}
+        player_team = current_player_team_summary()
+        if player_team:
+            payload["player_team"] = player_team
         return self._request(
-            "POST", "/matches", payload={"opponent": opponent_username}
+            "POST", "/matches", payload=payload
         )
 
     def respond_to_challenge(self, match_id: str, accept: bool) -> dict:

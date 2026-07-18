@@ -21,6 +21,8 @@ from ..functions.pokedex_functions import (
 from ..functions.pokemon_functions import pick_random_gender
 from ..utils import get_ev_spread
 
+_pvp_team_cursors: dict[str, int] = {}
+
 
 def _active_raid_from_controller(controller: Any) -> Optional[dict]:
     state = getattr(controller, "state", {}) or {}
@@ -152,6 +154,17 @@ def _build_pvp_opponent_tuple(
     ankimon_tracker_obj: Any,
 ) -> Optional[tuple]:
     opponent = match.get("opponent_pokemon") or {}
+    team = match.get("opponent_team") or []
+    match_id = str(match.get("id") or "")
+    if isinstance(team, list) and team:
+        cursor = _pvp_team_cursors.get(match_id, 0)
+        if cursor >= len(team):
+            cursor = len(team) - 1
+        team_pokemon = team[cursor]
+        if isinstance(team_pokemon, dict):
+            opponent = team_pokemon
+            if cursor < len(team) - 1:
+                _pvp_team_cursors[match_id] = cursor + 1
     opponent_name = match.get("opponent") or "opponent"
     return _build_pokemon_tuple(
         opponent,
