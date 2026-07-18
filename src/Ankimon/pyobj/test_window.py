@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
 from ..utils import random_item, load_custom_font
 
 from ..functions.drawing_utils import draw_gender_symbols, draw_stat_boosts
+from ..functions.battle_rules import is_trainer_enemy_pokemon
 
 from ..functions.pokedex_functions import get_pokemon_diff_lang_name, search_pokedex
 
@@ -669,7 +670,10 @@ class TestWindow(QWidget):
         # Create the dialog
         lang_name = get_pokemon_diff_lang_name(int(id), int(self.settings_obj.get('misc.language')))
 
-        self.setWindowTitle(f"{self.translator.translate('catch_or_free', enemy_pokemon_name=lang_name.capitalize())}")
+        if is_trainer_enemy_pokemon(self.enemy_pokemon):
+            self.setWindowTitle(f"Defeat {lang_name.capitalize()}")
+        else:
+            self.setWindowTitle(f"{self.translator.translate('catch_or_free', enemy_pokemon_name=lang_name.capitalize())}")
 
         # Display the Pokémon image
         pkmnimage_file = f"{int(search_pokedex(self.enemy_pokemon.name.lower(),'species_id'))}.png"
@@ -741,7 +745,12 @@ class TestWindow(QWidget):
         catch_button.setFont(QFont("Arial", 12))  # Adjust the font size and style as needed
         catch_button.setStyleSheet("background-color: rgb(44,44,44);")
         #catch_button.setFixedWidth(150)
-        qconnect(catch_button.clicked, lambda: self._reset_window_title(mw.catchpokemon))
+        if is_trainer_enemy_pokemon(self.enemy_pokemon):
+            catch_button.setText("Cannot catch")
+            catch_button.setEnabled(False)
+            nickname_input.setEnabled(False)
+        else:
+            qconnect(catch_button.clicked, lambda: self._reset_window_title(mw.catchpokemon))
 
         kill_button = QPushButton(self.translator.translate("defeat_button"))
         kill_button.setFixedSize(175, 30)  # Adjust the size as needed

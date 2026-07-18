@@ -156,6 +156,7 @@ from .functions.battle_functions import (
     validate_pokemon_status,
     process_battle_data,
 )
+from .functions.battle_rules import is_trainer_enemy_pokemon
 
 from .pyobj.error_handler import show_warning_with_traceback
 
@@ -851,6 +852,9 @@ def add_defeat_pokemon_hook(func):
 # Custom function that triggers the catch_pokemon hook
 def CatchPokemonHook():
     if enemy_pokemon.hp < 1:
+        if is_trainer_enemy_pokemon(enemy_pokemon):
+            tooltip("This enemy Pokemon cannot be caught.")
+            return
         catch_pokemon(
             enemy_pokemon,
             ankimon_tracker_obj,
@@ -948,6 +952,9 @@ gui_hooks.profile_will_close.append(backup_manager.on_anki_close)
 
 def catch_shortcut_function():
     if enemy_pokemon.hp < 1:
+        if is_trainer_enemy_pokemon(enemy_pokemon):
+            tooltip("This enemy Pokemon cannot be caught.")
+            return
         catch_pokemon(
             enemy_pokemon,
             ankimon_tracker_obj,

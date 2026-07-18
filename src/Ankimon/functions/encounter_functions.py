@@ -37,6 +37,7 @@ from ..functions.pokedex_functions import (
 from ..pyobj.error_handler import show_warning_with_traceback
 from ..functions.trainer_functions import xp_share_gain_exp
 from ..functions.badges_functions import check_for_badge, receive_badge
+from ..functions.battle_rules import is_trainer_enemy_pokemon
 from ..functions.drawing_utils import tooltipWithColour
 from ..utils import limit_ev_yield, play_effect_sound, get_ev_spread
 from ..business import calc_experience
@@ -777,6 +778,16 @@ def catch_pokemon(
     collected_pokemon_ids: Union[set, None] = None,
     achievements: Union[dict, None] = None,
 ):
+    if is_trainer_enemy_pokemon(enemy_pokemon):
+        msg = f"{enemy_pokemon.name.capitalize()} cannot be caught in this battle."
+        if logger is not None:
+            logger.log("game", msg)
+        try:
+            tooltipWithColour(msg, "#F0B27A")
+        except Exception:
+            pass
+        return
+
     ankimon_tracker_obj.caught += 1
     if ankimon_tracker_obj.caught > 1:
         if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
@@ -835,6 +846,9 @@ def handle_enemy_faint(
             auto_battle_setting = 0  # fallback
     except ValueError:
         auto_battle_setting = 0  # fallback
+
+    if is_trainer_enemy_pokemon(enemy_pokemon) and auto_battle_setting in (1, 3):
+        auto_battle_setting = 2
 
     if auto_battle_setting == 3:  # Catch if uncollected
         enemy_id = enemy_pokemon.id
