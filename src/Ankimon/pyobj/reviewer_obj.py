@@ -120,7 +120,17 @@ class Reviewer_Manager:
         enemy_lang_name = (get_pokemon_diff_lang_name(int(self.enemy_pokemon.id), int(self.settings.get('misc.language'))).capitalize())
         if self.enemy_pokemon.shiny is True:
             enemy_lang_name += " ⭐ "
-        name_display_text = f"{enemy_lang_name} LvL: {self.enemy_pokemon.level}"
+        enemy_owner = ""
+        enemy_tier = str(getattr(self.enemy_pokemon, "tier", "") or "")
+        if enemy_tier.startswith("PvP:"):
+            enemy_owner = enemy_tier.split(":", 1)[1].strip()
+            enemy_owner = enemy_owner.replace("-", " ").title()
+            enemy_owner = enemy_owner.replace("Lt Surge", "Lt. Surge")
+        if enemy_owner:
+            enemy_label = f"{enemy_owner}'s {enemy_lang_name}"
+        else:
+            enemy_label = enemy_lang_name
+        name_display_text = f"{enemy_label} LvL: {self.enemy_pokemon.level}"
         name_display_text += self.get_boost_values_string(self.enemy_pokemon, display_neutral_boost=False)
         hud_html += f'<div id="name-display" class="Ankimon">{name_display_text}</div>'
 
