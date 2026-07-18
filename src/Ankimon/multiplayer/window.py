@@ -11,7 +11,6 @@ from typing import Optional
 from aqt.utils import showInfo, tooltip
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -299,11 +298,6 @@ class MultiplayerWindow(QDialog):
         layout.addWidget(self.match_list)
 
         turn_row = QHBoxLayout()
-        turn_row.addWidget(QLabel("Move:"))
-        self.move_combo = QComboBox()
-        attacks = getattr(self.controller.main_pokemon, "attacks", None) or []
-        self.move_combo.addItems([str(attack) for attack in attacks])
-        turn_row.addWidget(self.move_combo, stretch=1)
         self.commit_button = QPushButton("Commit turn")
         self.commit_button.clicked.connect(self._on_commit_turn)
         turn_row.addWidget(self.commit_button)
@@ -381,13 +375,9 @@ class MultiplayerWindow(QDialog):
         if tokens < 1:
             tooltip("No turn tokens - answer more cards to charge one!")
             return
-        move = self.move_combo.currentText()
-        if not move:
-            tooltip("Your Pokemon has no moves to use.")
-            return
         self._run(
-            f"Committing {move}...",
-            lambda: self.controller.api.submit_turn(match["id"], move),
+            "Committing turn...",
+            lambda: self.controller.api.submit_turn(match["id"], ""),
         )
 
     # --- Shared plumbing --------------------------------------------------
