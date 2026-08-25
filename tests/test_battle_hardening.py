@@ -302,3 +302,34 @@ def test_battle_stats_are_isolated_from_the_source_stats(pokemon_obj_module):
     pokemon._battle_stats["spe"] = original_speed // 2  # e.g. paralysis speed drop
 
     assert pokemon.stats["spe"] == original_speed
+
+
+# --- _process_battle_effects: future sight ------------------------------------
+
+
+def _future_sight_messages(battle_functions, before, after):
+    return battle_functions._process_battle_effects(
+        instructions=[],
+        translator=FakeTranslator(),
+        main_pokemon=FakePokemon("pikachu"),
+        enemy_pokemon=FakePokemon("bulbasaur"),
+        current_state=None,
+        changes=[{"key": "user.future_sight", "before": before, "after": after}],
+    )
+
+
+def test_future_sight_start_is_announced(battle_functions):
+    messages = _future_sight_messages(battle_functions, (0, 0), (3, 0))
+    assert any("futuresight_start" in message for message in messages)
+
+
+def test_future_sight_countdown_is_announced(battle_functions):
+    messages = _future_sight_messages(battle_functions, (3, 0), (2, 0))
+    assert any("futuresight_still_active" in message for message in messages)
+
+
+def test_future_sight_hit_is_announced(battle_functions):
+    # This used to be an unreachable second elif with the same guard as the
+    # countdown branch, so the hit was never reported.
+    messages = _future_sight_messages(battle_functions, (1, 0), (0, 0))
+    assert any("futuresight_hits" in message for message in messages)

@@ -194,7 +194,8 @@ class StarterWindow(QWidget):
             grass_start = f"{grass_starter[self.current_gen]}"
             return water_start, fire_start, grass_start
         except Exception as e:
-            show_warning_with_traceback(parent=mw, exception=e, message=f"Error in get_starters_of_gen: {e}")
+            # `mw` is not imported in this module; the handler defaults to it.
+            show_warning_with_traceback(exception=e, message=f"Error in get_starters_of_gen: {e}")
             return None, None, None
 
     def display_starter_pokemon(self):

@@ -21,6 +21,11 @@ from ..texts import rate_addon_text_label, thankyou_message_text, dont_show_this
 from ..utils import give_item
 from ..singletons import logger, test_window
 
+# Written to rate_path when the file is missing or unreadable. Without it the
+# recovery paths below raised NameError instead of recreating the file.
+default_data = {"rate_this": False}
+
+
 def rate_this_addon():
 
     # Load rate data
@@ -29,10 +34,10 @@ def rate_this_addon():
             rate_data = json.load(file)
             # If the file was blank or corrupted, reset to default
             if not isinstance(rate_data, dict) or "rate_this" not in rate_data:
-                rate_data = default_data
+                rate_data = dict(default_data)
     except Exception:
         # If there was any error reading, recreate with default
-        rate_data = default_data
+        rate_data = dict(default_data)
         with open(rate_path, "w", encoding="utf-8") as f:
             json.dump(default_data, f, indent=4)
 

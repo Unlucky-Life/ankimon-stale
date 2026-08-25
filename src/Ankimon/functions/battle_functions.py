@@ -450,34 +450,31 @@ def _process_battle_effects(
             elif key.endswith('.future_sight'):
                 target = 'user' if key.startswith('user.') else 'opponent'
 
+                # The three cases used to overlap: the "started" branch matched
+                # any tuple with turns left, so the countdown never ran, and the
+                # "hit" branch repeated the countdown's guard and was dead code.
+                turns_before = before[0] if isinstance(before, tuple) and len(before) >= 1 else 0
+                turns_after = after[0] if isinstance(after, tuple) and len(after) >= 1 else 0
+                side = "your team" if target == 'user' else "the opposing team"
+
                 # Future sight started
-                if isinstance(after, tuple) and len(after) >= 2 and after[0] > 0:
-                    if not isinstance(before, tuple) or before[0] == 0:
-                        user_pokemon_name = get_pokemon_name(target)
-                        message = safe_translate(
-                            "futuresight_start",
-                            pokemon_name=user_pokemon_name,
-                            target_pokemon="the opposing Pokemon"
-                        )
-                        effect_messages.append(message)
+                if turns_before == 0 and turns_after > 0:
+                    message = safe_translate(
+                        "futuresight_start",
+                        pokemon_name=get_pokemon_name(target),
+                        target_pokemon="the opposing Pokemon"
+                    )
+                    effect_messages.append(message)
 
                 # Future sight decremented (still active)
-                elif isinstance(before, tuple) and isinstance(after, tuple) and len(before) >= 1 and len(after) >= 1:
-                    if before[0] > after[0] and after[0] > 0:
-                        message = safe_translate(
-                            "futuresight_still_active",
-                            side="your team" if target == 'user' else "the opposing team"
-                        )
-                        effect_messages.append(message)
+                elif turns_before > turns_after > 0:
+                    message = safe_translate("futuresight_still_active", side=side)
+                    effect_messages.append(message)
 
                 # Future sight ended (hit)
-                elif isinstance(before, tuple) and isinstance(after, tuple) and len(before) >= 1 and len(after) >= 1:
-                    if before[0] > 0 and after[0] == 0:
-                        message = safe_translate(
-                            "futuresight_hits",
-                            side="your team" if target == 'user' else "the opposing team"
-                        )
-                        effect_messages.append(message)
+                elif turns_before > 0 and turns_after == 0:
+                    message = safe_translate("futuresight_hits", side=side)
+                    effect_messages.append(message)
 
         except Exception as e:
             print(f"Error processing state change {change}: {e}")
