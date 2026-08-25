@@ -265,7 +265,15 @@ class MultiplayerController:
             return
         old_state = self.state
         merged = dict(old_state)
-        for key in ("raid", "raid_reward", "pvp"):
+        for key in (
+            "raid",
+            "raid_rooms",
+            "friends",
+            "friend_requests",
+            "raid_reward",
+            "pvp",
+            "guest",
+        ):
             if key in new_state:
                 merged[key] = new_state[key]
         self._derive_toasts(old_state, merged)
@@ -286,6 +294,9 @@ class MultiplayerController:
     def _derive_toasts(self, old_state: dict, new_state: dict):
         old_raid = old_state.get("raid") or {}
         new_raid = new_state.get("raid") or {}
+        if new_raid.get("locked") and not old_raid.get("locked"):
+            boss = new_raid.get("boss_name", "The raid")
+            self._queue_toast(f"{boss} raid has started — no one else can join.")
         if new_raid.get("boss_max_hp"):
             new_pct = 100 * new_raid.get("boss_hp", 0) / new_raid["boss_max_hp"]
             old_pct = (
@@ -301,6 +312,35 @@ class MultiplayerController:
                     if new_pct <= threshold < old_pct:
                         self._queue_toast(f"{boss} is down to {int(new_pct)}% HP!")
                         break
+
+        old_friends = {
+            f.get("username"): f for f in (old_state.get("friends") or [])
+        }
+        for friend in new_state.get("friends") or []:
+            name = friend.get("username")
+            old_friend = old_friends.get(name, {})
+            if friend.get("online") and not old_friend.get("online"):
+                self._queue_toast(f"{name} is online!")
+
+        old_incoming = {
+            r.get("username")
+            for r in (old_state.get("friend_requests") or {}).get("incoming", [])
+        }
+        new_requests = new_state.get("friend_requests") or {}
+        for request in new_requests.get("incoming", []):
+            name = request.get("username")
+            if name and name not in old_incoming:
+                self._queue_toast(f"{name} sent you a friend request!")
+
+        old_outgoing = {
+            r.get("username")
+            for r in (old_state.get("friend_requests") or {}).get("outgoing", [])
+        }
+        new_outgoing = {r.get("username") for r in new_requests.get("outgoing", [])}
+        new_friend_names = {f.get("username") for f in new_state.get("friends") or []}
+        for name in old_outgoing - new_outgoing:
+            if name in new_friend_names:
+                self._queue_toast(f"{name} accepted your friend request!")
 
         old_matches = {
             m.get("id"): m for m in (old_state.get("pvp") or {}).get("matches", [])

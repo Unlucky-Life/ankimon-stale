@@ -159,4 +159,15 @@ def claim_raid_reward(reward: dict) -> Optional[str]:
     _save_reward_pokemon(pokemon)
     claimed.add(reward_id)
     _save_claimed_reward_ids(claimed)
-    return f"{pokemon.name} joined your team as a raid reward!"
+
+    boss_name = reward.get("boss_name") or pokemon.name
+    reason = str(reward.get("reason") or "").strip()
+    tier = str(reward.get("tier") or "").strip()
+    if reason == "defeated":
+        headline = f"{boss_name} was defeated"
+    elif reason:
+        headline = f"{boss_name} raid ended ({reason.replace('_', ' ')})"
+    else:
+        headline = f"{boss_name} raid reward ready"
+    tier_text = f" a {tier} reward" if tier else " a raid reward"
+    return f"{headline} — you earned{tier_text}: {pokemon.name} joined your team!"

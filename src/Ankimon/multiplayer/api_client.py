@@ -29,6 +29,10 @@ class MultiplayerAuthError(MultiplayerApiError):
     """Raised when credentials are missing or rejected (401/403)."""
 
 
+class MultiplayerConflictError(MultiplayerApiError):
+    """Raised on 409 - e.g. joining a raid that has already started."""
+
+
 def load_credentials() -> Optional[dict]:
     """Return {"username": ..., "api_key": ...} or None if not configured.
 
@@ -115,6 +119,10 @@ class MultiplayerApiClient:
 
         if response.status_code in (401, 403):
             raise MultiplayerAuthError("Multiplayer credentials were rejected.")
+        if response.status_code == 409:
+            raise MultiplayerConflictError(
+                f"{method} {path} conflicted with server state (409)."
+            )
         if response.status_code >= 400:
             raise MultiplayerApiError(
                 f"{method} {path} failed with status {response.status_code}"
@@ -157,8 +165,21 @@ class MultiplayerApiClient:
 
     # --- Raids ------------------------------------------------------------
 
-    def create_raid(self, target_days: int = 5) -> dict:
-        return self._request("POST", "/raids", payload={"target_days": target_days})
+    def create_raid(
+        self,
+        target_days: int = 5,
+        visibility: str = "public",
+        bots: int = 0,
+    ) -> dict:
+        return self._request(
+            "POST",
+            "/raids",
+            payload={
+                "target_days": target_days,
+                "visibility": visibility,
+                "bots": bots,
+            },
+        )
 
     def join_raid(self, raid_code: str) -> dict:
         return self._request("POST", f"/raids/{raid_code}/join")
@@ -166,10 +187,24 @@ class MultiplayerApiClient:
     def leave_raid(self, raid_code: str) -> dict:
         return self._request("POST", f"/raids/{raid_code}/leave")
 
-    # --- Friend battles ---------------------------------------------------
+    def start_raid(self, raid_code: str) -> dict:
+        """Lock the raid (owner only) - no one else can join afterwards."""
+        return self._request("POST", f"/raids/{raid_code}/start")
+
+    # --- Friends ------------------------------------------------------------
 
     def add_friend(self, username: str) -> dict:
         return self._request("POST", "/friends", payload={"username": username})
+
+    def respond_to_friend_request(self, username: str, accept: bool) -> dict:
+        return self._request(
+            "POST", f"/friends/{username}/respond", payload={"accept": accept}
+        )
+
+    def remove_friend(self, username: str) -> dict:
+        return self._request("DELETE", f"/friends/{username}")
+
+    # --- Friend battles ---------------------------------------------------
 
     def challenge_friend(self, opponent_username: str) -> dict:
         return self._request(
