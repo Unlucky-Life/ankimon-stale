@@ -7,6 +7,7 @@ package executes the whole addon and needs ``aqt``). Same style as
 """
 
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -466,3 +467,87 @@ def test_claim_raid_reward_is_idempotent(raid_rewards_module):
 
     assert first is not None
     assert second is None
+
+
+# --- api_client: HTTP status handling ----------------------------------------
+
+
+class FakeResponse:
+    def __init__(self, status_code, body=None, content=b"{}"):
+        self.status_code = status_code
+        self._body = body
+        self.content = content
+        self.headers = {"Content-Type": "application/json"}
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("no json")
+        return self._body
+
+
+@pytest.fixture
+def api_client_module(tmp_dir):
+    """Load the real api_client with `requests` and the credentials path stubbed."""
+    saved = dict(sys.modules)
+    try:
+        _stub_package("Ankimon")
+        _stub_package("Ankimon.multiplayer")
+
+        requests_stub = types.ModuleType("requests")
+
+        class RequestException(Exception):
+            pass
+
+        requests_stub.exceptions = types.SimpleNamespace(
+            RequestException=RequestException
+        )
+        requests_stub.Session = lambda: types.SimpleNamespace(
+            request=lambda *a, **k: None
+        )
+        sys.modules["requests"] = requests_stub
+
+        credentials_path = os.path.join(tmp_dir, "credentials.json")
+        with open(credentials_path, "w", encoding="utf-8") as f:
+            json.dump({"username": "ash", "api_key": "key"}, f)
+        resources = types.ModuleType("Ankimon.resources")
+        resources.user_path_credentials = credentials_path
+        sys.modules["Ankimon.resources"] = resources
+
+        yield _load_from_path(
+            "Ankimon.multiplayer.api_client",
+            os.path.join(ANKIMON, "multiplayer", "api_client.py"),
+        )
+    finally:
+        sys.modules.clear()
+        sys.modules.update(saved)
+
+
+def _client_returning(api_client_module, response):
+    client = api_client_module.MultiplayerApiClient(FakeSettings())
+    client.session = types.SimpleNamespace(request=lambda *a, **k: response)
+    return client
+
+
+def test_401_is_an_auth_failure(api_client_module):
+    client = _client_returning(api_client_module, FakeResponse(401))
+    with pytest.raises(api_client_module.MultiplayerAuthError):
+        client.get_state()
+
+
+def test_403_is_not_an_auth_failure(api_client_module):
+    # A feature gate ("player battles are coming soon") must not disable
+    # multiplayer as if the credentials were wrong.
+    response = FakeResponse(403, {"error": "player-vs-player battles are coming soon"})
+    client = _client_returning(api_client_module, response)
+    with pytest.raises(api_client_module.MultiplayerApiError) as excinfo:
+        client.challenge_friend("gary")
+    assert not isinstance(excinfo.value, api_client_module.MultiplayerAuthError)
+    assert "coming soon" in str(excinfo.value)
+
+
+def test_409_carries_the_server_message(api_client_module):
+    response = FakeResponse(409, {"error": "this raid has already started"})
+    client = _client_returning(api_client_module, response)
+    with pytest.raises(api_client_module.MultiplayerConflictError) as excinfo:
+        client.join_raid("ABC234")
+    assert "already started" in str(excinfo.value)
