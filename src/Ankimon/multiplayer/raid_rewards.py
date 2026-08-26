@@ -69,8 +69,12 @@ def _build_reward_pokemon(reward: dict) -> Optional[PokemonObject]:
     if not name:
         return None
 
+    # The server tiers the reward and picks the level: full ~[30,40),
+    # partial ~[20,30). Clamping to [30,40) here would erase that
+    # difference and hand out a full-tier Pokemon for a partial reward,
+    # so only guard the Pokemon level range itself.
     level = int(reward.get("level") or 30)
-    level = max(30, min(level, 40))
+    level = max(1, min(level, 100))
     pokemon_type = search_pokedex(name, "types")
     base_stats = search_pokedex(name, "baseStats")
     if not pokemon_type or not base_stats:

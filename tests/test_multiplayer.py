@@ -433,6 +433,30 @@ def raid_rewards_module(tmp_dir):
         sys.modules.update(saved)
 
 
+def test_claim_raid_reward_keeps_the_server_reward_level(raid_rewards_module):
+    import json
+
+    from Ankimon.resources import mypokemon_path
+
+    # A partial-tier reward sits below the full-tier band; the client
+    # must not round it up into full-tier territory.
+    message = raid_rewards_module.claim_raid_reward(
+        {
+            "id": "reward-partial",
+            "boss_id": 144,
+            "boss_name": "Articuno",
+            "reason": "expired",
+            "tier": "partial",
+            "level": 23,
+        }
+    )
+    assert message is not None
+
+    with open(mypokemon_path, "r", encoding="utf-8") as f:
+        caught = json.load(f)
+    assert caught[-1]["level"] == 23
+
+
 def test_claim_raid_reward_grants_pokemon_and_mentions_tier_and_reason(
     raid_rewards_module,
 ):
