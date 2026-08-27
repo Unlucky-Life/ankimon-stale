@@ -353,3 +353,8 @@ default 2, user-editable), and move choice can be manual
    adaptive poll intervals, add the ETag/cursor fast path, and surface
    presence ("opponent is reviewing now") from recent-activity timestamps the
    server already has from batch ingests.
+5. **Phase D — peer-verified poke_engine resolution:** replace the
+   placeholder PvP damage formula with real engine resolution verified
+   between the two clients, and only then turn `PVP_HUMAN_ENABLED` on. Human
+   PvP stays gated off until this lands. Spec:
+   [`multiplayer-pvp-phase-d.md`](multiplayer-pvp-phase-d.md).
