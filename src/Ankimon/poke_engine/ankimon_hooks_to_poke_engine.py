@@ -75,6 +75,7 @@ def simulate_battle_with_poke_engine(
     enemy_move: str,
     mutator_full_reset: int,
     state: Union[State, None]=None,
+    rng=None,
     ):
     """
     Simulates a battle between two Pokémon using the poke-engine if available.
@@ -90,6 +91,12 @@ def simulate_battle_with_poke_engine(
         enemy_move (str or None): The move chosen by the opponent's Pokémon. If None, a random move will be selected.
         new_state (State): The current battle state, including the Pokémon's stats, field conditions, etc.
         mutator_full_reset (int): A flag controlling whether the battle state should be reset.
+        rng (random.Random or None): Source of randomness for the move fallback and the
+            outcome draw. Defaults to the `random` module's shared generator, which is
+            what the wild-battle loop uses. Peer-verified PvP (see
+            docs/multiplayer-pvp-phase-d.md) passes its own `random.Random(seed)` so a
+            round can be reproduced on the opponent's machine — seeding the global
+            generator instead would also reseed encounters, IVs and reward rolls.
 
     Returns:
         tuple: A tuple containing:
@@ -109,11 +116,15 @@ def simulate_battle_with_poke_engine(
         - The state mutator is applied to update the battle state after the moves are resolved.
     """
 
+    # The module generator is the wild-battle default; PvP passes a seeded one.
+    if rng is None:
+        rng = random
+
     # If no move is provided, use a random move
     if main_move is None and main_pokemon.attacks:
-        main_move = random.choice(main_pokemon.attacks)
+        main_move = rng.choice(main_pokemon.attacks)
     if enemy_move is None and enemy_pokemon.attacks:
-        enemy_move = random.choice(enemy_pokemon.attacks)
+        enemy_move = rng.choice(enemy_pokemon.attacks)
     if not main_move:
         main_move = "Splash"
     if not enemy_move:
@@ -218,7 +229,7 @@ def simulate_battle_with_poke_engine(
         # Randomly select ONE outcome from possible outcomes, using probability weights for the outcomes in actual Pokemon battles
         # e.g. if P(outcome 1):P(outcome 2) = 20% : 80%, then 20% chance to pick outcome 1 (picks randomly)
         weights = [outcome.percentage for outcome in transpose_instructions]
-        chosen_outcome = random.choices(transpose_instructions, weights=weights, k=1)[0]
+        chosen_outcome = rng.choices(transpose_instructions, weights=weights, k=1)[0]
 
     
         if settings_obj.get("battle.review_based_damage"):
