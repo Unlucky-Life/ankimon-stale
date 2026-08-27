@@ -68,6 +68,18 @@ def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None]=None) -> Sid
     )
     return side
 
+def canonical_outcome_key(outcome):
+    """Total order over one turn's possible outcomes.
+
+    Ordering must depend only on the outcome's content, never on the order the
+    engine happened to generate it in, so two clients drawing with the same
+    seed land on the same outcome. The instruction list is tuples of strings
+    and ints, so its repr is a faithful and stable key; the percentage breaks
+    ties between outcomes with identical instructions.
+    """
+    return (repr(outcome.instructions), outcome.percentage)
+
+
 def simulate_battle_with_poke_engine(
     main_pokemon: Pokemon,
     enemy_pokemon: Pokemon,
@@ -224,6 +236,16 @@ def simulate_battle_with_poke_engine(
         # Get all possible outcomes
         transpose_instructions = get_all_state_instructions(
             mutator, main_move_normalized, enemy_move_normalized
+        )
+
+        # Draw in a canonical order. rng.choices indexes into the list, so the
+        # same seed only reproduces the same outcome if the list is ordered the
+        # same way on both machines - which peer-verified PvP depends on
+        # (docs/multiplayer-pvp-phase-d.md, item D2). The engine's own order is
+        # stable today, so this is insurance against a future engine change or
+        # a different interpreter, not a fix for a known reordering.
+        transpose_instructions = sorted(
+            transpose_instructions, key=canonical_outcome_key
         )
 
         # Randomly select ONE outcome from possible outcomes, using probability weights for the outcomes in actual Pokemon battles
