@@ -79,6 +79,13 @@ canonically before drawing (e.g. by the serialized instruction list).
 Sorting is the safer choice even if the order looks stable today: it costs
 one sort per round and removes a whole class of "works on my machine".
 
+**Measured:** on CPython 3.12 the generation order *is* stable — the same
+turn produces the same 6 outcomes in the same order across `PYTHONHASHSEED`
+values. Sorting is therefore insurance against a future engine change or a
+different interpreter, not a fix for an observed reordering. Done in
+`canonical_outcome_key`; the test reverses the engine's output to simulate
+the reordering, since nothing reproduces it naturally.
+
 ### D3. Engine and data versions must match
 
 Two clients on different addon versions can hold different move data, base
@@ -202,10 +209,12 @@ State both limits in the UI rather than implying PvP is fully verified.
 
 ## Client work items
 
-1. Thread `rng` through `simulate_battle_with_poke_engine` (D1) — with a
-   test that the wild-battle path's outputs are unchanged when `rng` is
-   omitted.
-2. Canonical outcome ordering (D2).
+1. ~~Thread `rng` through `simulate_battle_with_poke_engine` (D1)~~ — done.
+   The audit that item braced for came back small: the only other randomness
+   in `poke_engine/` is `teams/load_team.py`, which the battle path never
+   reaches, so the engine core needed no change.
+2. ~~Canonical outcome ordering (D2)~~ — done, as insurance; see the
+   measurement above.
 3. Canonical team/state serializer + `state_hash` (D4), shared by both the
    submit path and the tests.
 4. `engine_version` computation (addon version + engine data hash) (D3).
