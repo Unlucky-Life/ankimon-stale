@@ -823,7 +823,7 @@ def remember_attack_details_window(individual_id, attack_set, all_attacks, logge
 
 
 def forget_attack_details_window(
-    individual_id: int, attack_set: list[str], logger: "InfoLogger.ShowInfoLogger"
+    individual_id: int, attack_set: list[str], logger: ShowInfoLogger
 ) -> None:
     """
     Creates a window that will allow the user to erase moves from a Pokemon.

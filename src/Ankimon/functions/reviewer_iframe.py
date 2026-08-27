@@ -57,6 +57,11 @@ def create_iframe_html(main_pokemon, enemy_pokemon, settings_obj, textmsg):
     return html_code
 
 def prepare(html, content, context):
+    # main_pokemon/enemy_pokemon/settings_obj are not module-level names here;
+    # they live in singletons, which is imported lazily to avoid a cycle
+    # (singletons builds the windows that pull in this package).
+    from ..singletons import enemy_pokemon, main_pokemon, settings_obj
+
     html_code = create_iframe_html(main_pokemon, enemy_pokemon, settings_obj, textmsg="")
     return html + html_code
 

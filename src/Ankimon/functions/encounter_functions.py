@@ -497,8 +497,8 @@ def save_main_pokemon_progress(
         try:
             mw.logger.game_log(f"Level Up: {msg}")
             tooltipWithColour(msg, color)
-        except:
-            pass
+        except Exception as e:
+            mw.logger.log("error", f"Failed to show level up message: {e}")
         if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
             logger.log_and_showinfo("info", f"{msg}")
         main_pokemon.xp = int(max(0, int(main_pokemon.xp) - int(experience)))
@@ -611,11 +611,17 @@ def save_main_pokemon_progress(
             mainpkmndata["tier"] = main_pokemon.tier
         if hasattr(main_pokemon, "is_favorite"):
             mainpkmndata["is_favorite"] = main_pokemon.is_favorite
-    mainpkmndata = [mainpkmndata]
+    if not main_pokemon_data:
+        mw.logger.log(
+            "error", f"No main pokemon data to save progress for {main_pokemon.name}"
+        )
+        return main_pokemon.level
+
+    updated_main_pokemon = mainpkmndata  # the entry updated by the loop above
     # Save the caught Pokémon's data to a JSON file
     try:
         with open(str(mainpokemon_path), "w") as json_file:
-            json.dump(mainpkmndata, json_file, indent=2)
+            json.dump([updated_main_pokemon], json_file, indent=2)
 
         # Load data from the output JSON file
         with open(str(mypokemon_path), "r", encoding="utf-8") as output_file:
@@ -626,14 +632,16 @@ def save_main_pokemon_progress(
                 if (
                     pokemon_data.get("individual_id") == main_pokemon.individual_id
                 ):  # Match by individual_id
-                    mypokemondata[index] = mypkmndata  # Replace with new data
+                    # `mypkmndata` was a typo for the updated main pokemon entry:
+                    # it raised NameError here, so the collection file never got
+                    # the new xp/level/ev and the whole save was reported failed.
+                    mypokemondata[index] = updated_main_pokemon
                     break
 
             # Save the modified data to the output JSON file
             with open(str(mypokemon_path), "w") as output_file:
                 json.dump(mypokemondata, output_file, indent=2)
 
-        sync_mainpokemon_to_mypokemon(main_pokemon, mainpokemon_path, mypokemon_path)
         mw.logger.log("info", f"Successfully saved progress for {main_pokemon.name}")
     except Exception as e:
         mw.logger.log("error", f"Failed to save pokemon progress: {str(e)}")

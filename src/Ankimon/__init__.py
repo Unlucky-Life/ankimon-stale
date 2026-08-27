@@ -155,6 +155,7 @@ from .functions.battle_functions import (
     update_pokemon_battle_status,
     validate_pokemon_status,
     process_battle_data,
+    split_damage_and_heals,
 )
 
 from .pyobj.error_handler import show_warning_with_traceback
@@ -523,7 +524,7 @@ def on_review_card(*args):
 
         try:
             mutator_full_reset
-        except:
+        except NameError:
             mutator_full_reset = 1
 
         if (
@@ -588,7 +589,7 @@ def on_review_card(*args):
                 opponent_hp_after
                 dmg_from_enemy_move
                 dmg_from_user_move
-            except:
+            except NameError:
                 new_state = None
                 mutator_full_reset = 1
                 user_hp_after = 0
@@ -639,15 +640,14 @@ def on_review_card(*args):
                 ]
             )
 
-            # workaround for the DAMAGE being negative in some cases
-            if true_dmg_from_enemy_move < 0:
-                true_dmg_from_enemy_move = 0
-                heals_to_user += abs(
-                    true_dmg_from_enemy_move
-                )  # Add the negative damage as a heal
-            if true_dmg_from_user_move < 0:
-                true_dmg_from_user_move = 0
-                heals_to_opponent += abs(true_dmg_from_user_move)
+            # workaround for the DAMAGE being negative in some cases:
+            # negative damage is booked as a heal (see split_damage_and_heals)
+            true_dmg_from_enemy_move, heals_to_user = split_damage_and_heals(
+                true_dmg_from_enemy_move, heals_to_user
+            )
+            true_dmg_from_user_move, heals_to_opponent = split_damage_and_heals(
+                true_dmg_from_user_move, heals_to_opponent
+            )
 
             # 3. --- IMMEDIATE STATE SYNCHRONIZATION (THE FIX) ---
             # Update Pokémon objects with the new state from the engine BEFORE any other processing.

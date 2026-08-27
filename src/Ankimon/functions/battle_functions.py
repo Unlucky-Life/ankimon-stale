@@ -104,8 +104,13 @@ def update_pokemon_battle_status(battle_info: dict, enemy_pokemon, main_pokemon)
         # Use the existing error handler if available, otherwise print
         try:
             from ..pyobj.error_handler import show_warning_with_traceback
-            show_warning_with_traceback(e, "Failed to update pokemon battle status")
-        except ImportError:
+            # Positional args land on `parent`, leaving `exception=None`, which makes
+            # the handler raise ValueError and replace the real error with its own.
+            show_warning_with_traceback(
+                exception=e,
+                message="Failed to update pokemon battle status",
+            )
+        except Exception:
             print(f"ERROR in update_pokemon_battle_status: {e}")
         return False, False
 
@@ -445,34 +450,31 @@ def _process_battle_effects(
             elif key.endswith('.future_sight'):
                 target = 'user' if key.startswith('user.') else 'opponent'
 
+                # The three cases used to overlap: the "started" branch matched
+                # any tuple with turns left, so the countdown never ran, and the
+                # "hit" branch repeated the countdown's guard and was dead code.
+                turns_before = before[0] if isinstance(before, tuple) and len(before) >= 1 else 0
+                turns_after = after[0] if isinstance(after, tuple) and len(after) >= 1 else 0
+                side = "your team" if target == 'user' else "the opposing team"
+
                 # Future sight started
-                if isinstance(after, tuple) and len(after) >= 2 and after[0] > 0:
-                    if not isinstance(before, tuple) or before[0] == 0:
-                        user_pokemon_name = get_pokemon_name(target)
-                        message = safe_translate(
-                            "futuresight_start",
-                            pokemon_name=user_pokemon_name,
-                            target_pokemon="the opposing Pokemon"
-                        )
-                        effect_messages.append(message)
+                if turns_before == 0 and turns_after > 0:
+                    message = safe_translate(
+                        "futuresight_start",
+                        pokemon_name=get_pokemon_name(target),
+                        target_pokemon="the opposing Pokemon"
+                    )
+                    effect_messages.append(message)
 
                 # Future sight decremented (still active)
-                elif isinstance(before, tuple) and isinstance(after, tuple) and len(before) >= 1 and len(after) >= 1:
-                    if before[0] > after[0] and after[0] > 0:
-                        message = safe_translate(
-                            "futuresight_still_active",
-                            side="your team" if target == 'user' else "the opposing team"
-                        )
-                        effect_messages.append(message)
+                elif turns_before > turns_after > 0:
+                    message = safe_translate("futuresight_still_active", side=side)
+                    effect_messages.append(message)
 
                 # Future sight ended (hit)
-                elif isinstance(before, tuple) and isinstance(after, tuple) and len(before) >= 1 and len(after) >= 1:
-                    if before[0] > 0 and after[0] == 0:
-                        message = safe_translate(
-                            "futuresight_hits",
-                            side="your team" if target == 'user' else "the opposing team"
-                        )
-                        effect_messages.append(message)
+                elif turns_before > 0 and turns_after == 0:
+                    message = safe_translate("futuresight_hits", side=side)
+                    effect_messages.append(message)
 
         except Exception as e:
             print(f"Error processing state change {change}: {e}")
@@ -549,7 +551,9 @@ def process_battle_data(
         )
 
         # 2. Enemy attack section
-        if enemy_attack is not "splash" or None:
+        # `x is not "splash" or None` was always true (identity check on a literal,
+        # then or-ed with None), so "no attack this round" still announced a move.
+        if enemy_attack and enemy_attack != "splash":
 
             # --- NEW: Format enemy move name ---
             formatted_enemy_attack = format_move_name(enemy_attack)
@@ -562,26 +566,25 @@ def process_battle_data(
             message_parts.append(enemy_attack_msg)
 
         # 3. User attack section
-        if user_attack is not "splash" or None:
+        # A status message replaces the attack announcement, but is reported even
+        # when the user has no move to use ("splash").
+        if battle_status and battle_status != "fighting":
+            status_msg = _handle_special_battle_status(
+                main_pokemon, battle_status, translator
+            )
+            if status_msg:
+                message_parts.append(status_msg)
+        elif user_attack and user_attack != "splash":
+            # --- NEW: Format user move name ---
+            formatted_user_attack = format_move_name(user_attack)
 
-            # Handle special battle statuses first
-            if battle_status and battle_status != "fighting":
-                status_msg = _handle_special_battle_status(
-                    main_pokemon, battle_status, translator
-                )
-                if status_msg:
-                    message_parts.append(status_msg)
-            else:
-                # --- NEW: Format user move name ---
-                formatted_user_attack = format_move_name(user_attack)
-
-                # Normal attack resolution
-                user_attack_msg = translator.translate(
-                    "player_attack_announcement",
-                    pokemon_name=main_pokemon.name.capitalize(),
-                    attack_name=formatted_user_attack  # Use the formatted name
-                )
-                message_parts.append(user_attack_msg)
+            # Normal attack resolution
+            user_attack_msg = translator.translate(
+                "player_attack_announcement",
+                pokemon_name=main_pokemon.name.capitalize(),
+                attack_name=formatted_user_attack  # Use the formatted name
+            )
+            message_parts.append(user_attack_msg)
 
         # 4. Process all other battle effect instructions
         if isinstance(battle_info, dict) and 'instructions' in battle_info:
@@ -667,3 +670,17 @@ def calculate_hp(base_stat_hp, level, ev, iv):
     #hp = int(((iv + 2 * (base_stat_hp + ev) + 100) * level) / 100 + 10)
     hp = int((((((base_stat_hp + iv_value) * 2 ) + ev_value) * level) / 100) + level + 10)
     return hp
+
+
+def split_damage_and_heals(damage, heals):
+    """Normalize one side's turn total into (damage, heals).
+
+    The engine reports "negative damage" for effects that heal the target
+    (Life Orb style items work the other way round and report negative heals).
+    A negative damage total is therefore booked as a heal and the damage is
+    clamped to zero - in that order, so the heal is not lost.
+    """
+    if damage < 0:
+        heals += abs(damage)
+        damage = 0
+    return damage, heals

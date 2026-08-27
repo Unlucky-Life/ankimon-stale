@@ -709,13 +709,10 @@ def get_main_pokemon_data():
         _xp = main_pokemon_data.get("xp") or main_pokemon_data["stats"].get("xp", 0)
         _ev = main_pokemon_data["ev"]
         _iv = main_pokemon_data["iv"]
-        # mainpokemon_battle_stats = mainpokemon_stats
-        _battle_stats = {}
-        for d in [_stats, _iv, _ev]:
-            for key, value in d.items():
-                _battle_stats[key] = value
-        # mainpokemon_battle_stats += mainpokemon_iv
-        # mainpokemon_battle_stats += mainpokemon_ev
+        # Battle stats are the working copy of the real stats; merging
+        # stats/iv/ev into one dict here only ever produced a copy of _ev,
+        # because all three share the same keys.
+        _battle_stats = dict(_stats)
         _hp = calculate_hp(_hp_base_stat, _level, _ev, _iv)
         _current_hp = _hp
         _base_experience = main_pokemon_data["base_experience"]

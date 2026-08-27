@@ -217,12 +217,13 @@ class PokemonObject:
         self._update_battle_stats()
 
     def _update_battle_stats(self):
-        """Update battle stats with current stats, EVs, and IVs."""
-        self._battle_stats = {}
-        # Only update battle stats with valid keys
-        for d in [self.stats, self.iv, self.ev]:
-            for key, value in d.items():
-                self._battle_stats[key] = value
+        """Snapshot the working stats used during a battle.
+
+        This used to merge stats/iv/ev into one dict by writing the same keys
+        ("hp", "atk", ...) three times in a row, so the result was always just
+        a copy of `self.ev` - never the actual battle stats.
+        """
+        self._battle_stats = dict(self.stats)
 
     def calculate_max_hp(self):
         ev, iv = self.ev["hp"], self.iv["hp"]
