@@ -1,4 +1,4 @@
-"""Multiplayer window: raid boss lobby and friend battles.
+"""Multiplayer window: raid boss lobby, friends, and practice battles.
 
 Opened from the Ankimon menu. All server calls go through
 MultiplayerController.run_action (background thread + main-thread callback),
@@ -21,12 +21,13 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
 )
 
 from . import get_controller
-from .api_client import load_credentials
+from .api_client import MultiplayerConflictError, load_credentials
 
 _window = None
 
@@ -52,7 +53,7 @@ class MultiplayerWindow(QDialog):
         super().__init__()
         self.controller = controller
         self.setWindowTitle("Ankimon Multiplayer")
-        self.resize(540, 640)
+        self.resize(600, 700)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_connection_group())
@@ -60,7 +61,8 @@ class MultiplayerWindow(QDialog):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_raid_tab(), "Raid Boss")
-        self.tabs.addTab(self._build_pvp_tab(), "Friend Battles")
+        self.tabs.addTab(self._build_friends_tab(), "Friends")
+        self.tabs.addTab(self._build_pvp_tab(), "Battles")
         layout.addWidget(self.tabs)
 
         refresh_button = QPushButton("Refresh")
@@ -126,7 +128,7 @@ class MultiplayerWindow(QDialog):
         demo_button = QPushButton("Create test raid + bot")
         demo_button.clicked.connect(self._on_setup_demo)
         buttons_row.addWidget(demo_button)
-        challenge_button = QPushButton("Challenge test bot")
+        challenge_button = QPushButton("Challenge test bot (practice)")
         challenge_button.clicked.connect(self._on_challenge_test_bot)
         buttons_row.addWidget(challenge_button)
         layout.addLayout(buttons_row)
@@ -218,18 +220,48 @@ class MultiplayerWindow(QDialog):
         self.raid_info = QLabel("")
         layout.addWidget(self.raid_info)
 
+        self.start_raid_button = QPushButton("Start raid (locks the room)")
+        self.start_raid_button.setToolTip(
+            "Once started, no one else can join this raid."
+        )
+        self.start_raid_button.clicked.connect(self._on_start_raid)
+        self.start_raid_button.setVisible(False)
+        layout.addWidget(self.start_raid_button)
+
         layout.addWidget(QLabel("Party contributions:"))
         self.raid_party_list = QListWidget()
+        self.raid_party_list.setMaximumHeight(90)
         layout.addWidget(self.raid_party_list)
+
+        layout.addWidget(QLabel("Open raid rooms:"))
+        self.raid_room_list = QListWidget()
+        layout.addWidget(self.raid_room_list)
+
+        room_buttons_row = QHBoxLayout()
+        join_selected_button = QPushButton("Join selected room")
+        join_selected_button.clicked.connect(self._on_join_selected_room)
+        room_buttons_row.addWidget(join_selected_button)
+        layout.addLayout(room_buttons_row)
 
         join_row = QHBoxLayout()
         self.raid_code_input = QLineEdit()
         self.raid_code_input.setPlaceholderText("Raid code from a friend")
         join_row.addWidget(self.raid_code_input)
-        join_button = QPushButton("Join raid")
+        join_button = QPushButton("Join by code")
         join_button.clicked.connect(self._on_join_raid)
         join_row.addWidget(join_button)
         layout.addLayout(join_row)
+
+        create_row = QHBoxLayout()
+        create_row.addWidget(QLabel("Visibility:"))
+        self.raid_visibility_combo = QComboBox()
+        self.raid_visibility_combo.addItems(["public", "friends", "code"])
+        create_row.addWidget(self.raid_visibility_combo)
+        create_row.addWidget(QLabel("Bots:"))
+        self.raid_bots_spin = QSpinBox()
+        self.raid_bots_spin.setRange(0, 5)
+        create_row.addWidget(self.raid_bots_spin)
+        layout.addLayout(create_row)
 
         buttons_row = QHBoxLayout()
         create_button = QPushButton("Create new raid")
@@ -243,14 +275,46 @@ class MultiplayerWindow(QDialog):
         return tab
 
     def _on_create_raid(self):
-        self._run("Creating raid...", lambda: self.controller.api.create_raid())
+        visibility = self.raid_visibility_combo.currentText()
+        bots = self.raid_bots_spin.value()
+        self._run(
+            "Creating raid...",
+            lambda: self.controller.api.create_raid(visibility=visibility, bots=bots),
+        )
 
     def _on_join_raid(self):
         code = self.raid_code_input.text().strip()
         if not code:
             tooltip("Enter a raid code first.")
             return
-        self._run("Joining raid...", lambda: self.controller.api.join_raid(code))
+        self._join_raid_code(code)
+
+    def _selected_raid_room(self) -> Optional[dict]:
+        item = self.raid_room_list.currentItem()
+        if item is None:
+            return None
+        return item.data(0x0100)
+
+    def _on_join_selected_room(self):
+        room = self._selected_raid_room()
+        if not room:
+            tooltip("Select a raid room first.")
+            return
+        if room.get("locked"):
+            showInfo("This raid has already started and can't be joined.")
+            return
+        code = room.get("code")
+        if not code:
+            tooltip("That room has no code.")
+            return
+        self._join_raid_code(code)
+
+    def _join_raid_code(self, code: str):
+        self._run(
+            "Joining raid...",
+            lambda: self.controller.api.join_raid(code),
+            conflict_message="This raid has already started and can't be joined.",
+        )
 
     def _on_leave_raid(self):
         raid = self.controller.state.get("raid") or {}
@@ -260,33 +324,165 @@ class MultiplayerWindow(QDialog):
             return
         self._run("Leaving raid...", lambda: self.controller.api.leave_raid(code))
 
-    # --- Friend battles tab ----------------------------------------------
+    def _on_start_raid(self):
+        raid = self.controller.state.get("raid") or {}
+        code = raid.get("code")
+        if not code:
+            tooltip("You are not in a raid.")
+            return
+        self._run(
+            "Starting raid... no one else will be able to join afterwards.",
+            lambda: self.controller.api.start_raid(code),
+        )
+
+    # --- Friends tab --------------------------------------------------------
+
+    def _build_friends_tab(self):
+        tab = QGroupBox()
+        layout = QVBoxLayout(tab)
+
+        add_row = QHBoxLayout()
+        self.add_friend_input = QLineEdit()
+        self.add_friend_input.setPlaceholderText("Username to add")
+        add_row.addWidget(self.add_friend_input)
+        add_friend_button = QPushButton("Add friend")
+        add_friend_button.clicked.connect(self._on_add_friend)
+        add_row.addWidget(add_friend_button)
+        layout.addLayout(add_row)
+
+        layout.addWidget(QLabel("Friends:"))
+        self.friend_list = QListWidget()
+        layout.addWidget(self.friend_list, stretch=2)
+
+        friend_buttons_row = QHBoxLayout()
+        remove_friend_button = QPushButton("Remove selected friend")
+        remove_friend_button.clicked.connect(self._on_remove_friend)
+        friend_buttons_row.addWidget(remove_friend_button)
+        layout.addLayout(friend_buttons_row)
+
+        layout.addWidget(QLabel("Incoming requests:"))
+        self.incoming_requests_list = QListWidget()
+        self.incoming_requests_list.setMaximumHeight(80)
+        layout.addWidget(self.incoming_requests_list)
+
+        incoming_buttons_row = QHBoxLayout()
+        accept_request_button = QPushButton("Accept")
+        accept_request_button.clicked.connect(lambda: self._on_respond_friend_request(True))
+        incoming_buttons_row.addWidget(accept_request_button)
+        decline_request_button = QPushButton("Decline")
+        decline_request_button.clicked.connect(lambda: self._on_respond_friend_request(False))
+        incoming_buttons_row.addWidget(decline_request_button)
+        layout.addLayout(incoming_buttons_row)
+
+        layout.addWidget(QLabel("Outgoing requests (pending):"))
+        self.outgoing_requests_list = QListWidget()
+        self.outgoing_requests_list.setMaximumHeight(60)
+        layout.addWidget(self.outgoing_requests_list)
+
+        return tab
+
+    def _friend_status_text(self, friend: dict) -> str:
+        if friend.get("bot"):
+            return "bot"
+        if friend.get("reviewing_now"):
+            return "reviewing"
+        if friend.get("online"):
+            return "online"
+        last_seen = friend.get("last_seen")
+        return f"offline - last seen {last_seen}" if last_seen else "offline"
+
+    def _friend_row_text(self, friend: dict) -> str:
+        name = friend.get("username", "?")
+        parts = [name, f"({self._friend_status_text(friend)})"]
+        if friend.get("in_raid"):
+            parts.append("[in raid]")
+        if friend.get("in_match"):
+            parts.append("[in battle]")
+        return " ".join(parts)
+
+    def _selected_friend(self) -> Optional[dict]:
+        item = self.friend_list.currentItem()
+        if item is None:
+            return None
+        return item.data(0x0100)
+
+    def _on_add_friend(self):
+        username = self.add_friend_input.text().strip()
+        if not username:
+            tooltip("Enter a username first.")
+            return
+        self._run(
+            f"Sending friend request to {username}...",
+            lambda: self.controller.api.add_friend(username),
+        )
+        self.add_friend_input.clear()
+
+    def _on_remove_friend(self):
+        friend = self._selected_friend()
+        if not friend:
+            tooltip("Select a friend first.")
+            return
+        username = friend.get("raw_username") or friend.get("username")
+        self._run(
+            f"Removing {friend.get('username', username)}...",
+            lambda: self.controller.api.remove_friend(username),
+        )
+
+    def _selected_incoming_request(self) -> Optional[dict]:
+        item = self.incoming_requests_list.currentItem()
+        if item is None:
+            return None
+        return item.data(0x0100)
+
+    def _on_respond_friend_request(self, accept: bool):
+        request = self._selected_incoming_request()
+        if not request:
+            tooltip("Select an incoming request first.")
+            return
+        username = request.get("username")
+        self._run(
+            "Sending response...",
+            lambda: self.controller.api.respond_to_friend_request(username, accept),
+        )
+
+    # --- Battles tab (bot practice + gated human PvP) ----------------------
 
     def _build_pvp_tab(self):
         tab = QGroupBox()
         layout = QVBoxLayout(tab)
 
-        challenge_row = QHBoxLayout()
+        self.pvp_gate_label = QLabel(
+            "Player battles are coming soon. Bot practice battles are available now."
+        )
+        self.pvp_gate_label.setStyleSheet("color: #B9770E; font-style: italic;")
+        self.pvp_gate_label.setWordWrap(True)
+        layout.addWidget(self.pvp_gate_label)
+
+        self.challenge_group = QGroupBox("Challenge a player")
+        challenge_layout = QHBoxLayout(self.challenge_group)
         self.challenge_input = QLineEdit()
         self.challenge_input.setPlaceholderText("Friend's username")
-        challenge_row.addWidget(self.challenge_input)
-        challenge_button = QPushButton("Challenge")
-        challenge_button.clicked.connect(self._on_challenge)
-        challenge_row.addWidget(challenge_button)
-        layout.addLayout(challenge_row)
+        challenge_layout.addWidget(self.challenge_input)
+        self.challenge_button = QPushButton("Challenge")
+        self.challenge_button.clicked.connect(self._on_challenge)
+        challenge_layout.addWidget(self.challenge_button)
+        layout.addWidget(self.challenge_group)
 
         friend_row = QHBoxLayout()
         friend_row.addWidget(QLabel("Friends:"))
-        self.friend_list = QListWidget()
-        self.friend_list.setMaximumHeight(90)
-        friend_row.addWidget(self.friend_list, stretch=1)
+        self.pvp_friend_list = QListWidget()
+        self.pvp_friend_list.setMaximumHeight(90)
+        self.pvp_friend_list.currentRowChanged.connect(
+            lambda _row: self._update_pvp_gate_controls()
+        )
+        friend_row.addWidget(self.pvp_friend_list, stretch=1)
         friend_buttons = QVBoxLayout()
         add_test_friend_button = QPushButton("Add test bot")
         add_test_friend_button.clicked.connect(self._on_add_test_bot_friend)
         friend_buttons.addWidget(add_test_friend_button)
-        challenge_selected_button = QPushButton("Challenge selected")
-        challenge_selected_button.clicked.connect(self._on_challenge_selected_friend)
-        friend_buttons.addWidget(challenge_selected_button)
+        self.challenge_selected_button = QPushButton("Challenge selected (practice)")
+        self.challenge_selected_button.clicked.connect(self._on_challenge_selected_friend)
+        friend_buttons.addWidget(self.challenge_selected_button)
         friend_row.addLayout(friend_buttons)
         layout.addLayout(friend_row)
 
@@ -320,14 +516,18 @@ class MultiplayerWindow(QDialog):
 
         return tab
 
+    def _human_pvp_enabled(self) -> bool:
+        pvp = self.controller.state.get("pvp") or {}
+        return bool(pvp.get("human_enabled"))
+
     def _selected_match(self) -> Optional[dict]:
         item = self.match_list.currentItem()
         if item is None:
             return None
         return item.data(0x0100)
 
-    def _selected_friend(self) -> Optional[dict]:
-        item = self.friend_list.currentItem()
+    def _selected_pvp_friend(self) -> Optional[dict]:
+        item = self.pvp_friend_list.currentItem()
         if item is None:
             return None
         return item.data(0x0100)
@@ -336,9 +536,12 @@ class MultiplayerWindow(QDialog):
         self._run("Adding test bot friend...", lambda: self.controller.api.add_friend("bot"))
 
     def _on_challenge_selected_friend(self):
-        friend = self._selected_friend()
+        friend = self._selected_pvp_friend()
         if not friend:
             tooltip("Select a friend first.")
+            return
+        if not friend.get("bot") and not self._human_pvp_enabled():
+            showInfo("Player battles are coming soon - only bot friends can be challenged.")
             return
         opponent = friend.get("challenge_value") or friend.get("raw_username") or friend.get("username")
         if not opponent:
@@ -350,6 +553,9 @@ class MultiplayerWindow(QDialog):
         )
 
     def _on_challenge(self):
+        if not self._human_pvp_enabled():
+            showInfo("Player battles are coming soon.")
+            return
         opponent = self.challenge_input.text().strip()
         if not opponent:
             tooltip("Enter a username to challenge.")
@@ -392,7 +598,7 @@ class MultiplayerWindow(QDialog):
 
     # --- Shared plumbing --------------------------------------------------
 
-    def _run(self, busy_message: str, task):
+    def _run(self, busy_message: str, task, conflict_message: Optional[str] = None):
         """Run an API action in the background and refresh on completion."""
         if not self.controller.enabled:
             showInfo(
@@ -404,7 +610,10 @@ class MultiplayerWindow(QDialog):
 
         def on_done(_result, error):
             if error is not None:
-                showInfo(f"Multiplayer request failed:\n{error}")
+                if isinstance(error, MultiplayerConflictError):
+                    showInfo(conflict_message or "This action conflicts with the current server state.")
+                else:
+                    showInfo(f"Multiplayer request failed:\n{error}")
                 return
             self.refresh_from_server()
 
@@ -434,40 +643,84 @@ class MultiplayerWindow(QDialog):
         self.controller.refresh_state(lambda _ok: self.refresh_from_state())
 
     def refresh_from_state(self):
-        """Redraw both tabs from the controller's cached state."""
+        """Redraw every tab from the controller's cached state."""
         state = self.controller.state
         raid = state.get("raid") or {}
+        credentials = load_credentials() or {}
         if raid.get("boss_max_hp"):
             pct = max(0, min(100, int(100 * raid.get("boss_hp", 0) / raid["boss_max_hp"])))
             self.raid_title.setText(f"{raid.get('boss_name', 'Raid boss')}")
             self.raid_bar.setValue(pct)
             info = f"Raid code: {raid.get('code', '?')}"
+            if raid.get("visibility"):
+                info += f" - {raid['visibility']}"
+            if raid.get("locked"):
+                info += " - LOCKED"
             if raid.get("ends_at"):
                 info += f" - Ends: {raid['ends_at']}"
             if raid.get("your_damage_today") is not None:
                 info += f" - Your damage today: {raid['your_damage_today']}"
             self.raid_info.setText(info)
+
+            is_owner = raid.get("owner") and raid.get("owner") == credentials.get("username")
+            self.start_raid_button.setVisible(bool(is_owner and not raid.get("locked")))
         else:
             self.raid_title.setText("No active raid")
             self.raid_bar.setValue(0)
             self.raid_info.setText("Create a raid or join one with a friend's code.")
+            self.start_raid_button.setVisible(False)
 
         self.raid_party_list.clear()
         for member in raid.get("party", []):
+            suffix = " (bot)" if member.get("bot") else ""
             self.raid_party_list.addItem(
-                f"{member.get('username', '?')} - {member.get('damage', 0)} dmg"
+                f"{member.get('username', '?')}{suffix} - {member.get('damage', 0)} dmg"
             )
+
+        self.raid_room_list.clear()
+        for room in state.get("raid_rooms", []):
+            boss = room.get("boss_name", "?")
+            hp_pct = 0
+            if room.get("boss_max_hp"):
+                hp_pct = int(100 * room.get("boss_hp", 0) / room["boss_max_hp"])
+            status = "LOCKED" if room.get("locked") else "open"
+            joined = " [joined]" if room.get("joined") else ""
+            text = (
+                f"{boss} {hp_pct}% - {room.get('party_size', 0)} players - "
+                f"{room.get('visibility', '?')} - owner {room.get('owner', '?')} - "
+                f"{status}{joined}"
+            )
+            item = QListWidgetItem(text)
+            item.setData(0x0100, room)
+            self.raid_room_list.addItem(item)
 
         pvp = state.get("pvp") or {}
         self.tokens_label.setText(f"Turn tokens: {pvp.get('tokens', 0)} / 3")
 
         self.friend_list.clear()
         for friend in state.get("friends", []):
+            item = QListWidgetItem(self._friend_row_text(friend))
+            item.setData(0x0100, friend)
+            self.friend_list.addItem(item)
+
+        self.pvp_friend_list.clear()
+        for friend in state.get("friends", []):
             name = friend.get("username", "?")
             suffix = " (bot)" if friend.get("bot") else ""
             item = QListWidgetItem(f"{name}{suffix}")
             item.setData(0x0100, friend)
-            self.friend_list.addItem(item)
+            self.pvp_friend_list.addItem(item)
+
+        friend_requests = state.get("friend_requests") or {}
+        self.incoming_requests_list.clear()
+        for request in friend_requests.get("incoming", []):
+            item = QListWidgetItem(request.get("username", "?"))
+            item.setData(0x0100, request)
+            self.incoming_requests_list.addItem(item)
+
+        self.outgoing_requests_list.clear()
+        for request in friend_requests.get("outgoing", []):
+            self.outgoing_requests_list.addItem(request.get("username", "?"))
 
         self.match_list.clear()
         for match in pvp.get("matches", []):
@@ -487,6 +740,7 @@ class MultiplayerWindow(QDialog):
             self.match_list.addItem(item)
 
         self._update_turn_controls()
+        self._update_pvp_gate_controls()
 
     def _update_turn_controls(self):
         match = self._selected_match()
@@ -499,3 +753,14 @@ class MultiplayerWindow(QDialog):
         self.accept_button.setEnabled(is_incoming)
         self.decline_button.setEnabled(is_incoming)
         self.commit_button.setEnabled(can_commit)
+
+    def _update_pvp_gate_controls(self):
+        human_enabled = self._human_pvp_enabled()
+        self.pvp_gate_label.setVisible(not human_enabled)
+        self.challenge_group.setVisible(human_enabled)
+
+        friend = self._selected_pvp_friend()
+        selected_is_bot = bool(friend and friend.get("bot"))
+        self.challenge_selected_button.setEnabled(
+            human_enabled or selected_is_bot or friend is None
+        )

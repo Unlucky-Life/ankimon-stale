@@ -69,8 +69,12 @@ def _build_reward_pokemon(reward: dict) -> Optional[PokemonObject]:
     if not name:
         return None
 
+    # The server tiers the reward and picks the level: full ~[30,40),
+    # partial ~[20,30). Clamping to [30,40) here would erase that
+    # difference and hand out a full-tier Pokemon for a partial reward,
+    # so only guard the Pokemon level range itself.
     level = int(reward.get("level") or 30)
-    level = max(30, min(level, 40))
+    level = max(1, min(level, 100))
     pokemon_type = search_pokedex(name, "types")
     base_stats = search_pokedex(name, "baseStats")
     if not pokemon_type or not base_stats:
@@ -159,4 +163,15 @@ def claim_raid_reward(reward: dict) -> Optional[str]:
     _save_reward_pokemon(pokemon)
     claimed.add(reward_id)
     _save_claimed_reward_ids(claimed)
-    return f"{pokemon.name} joined your team as a raid reward!"
+
+    boss_name = reward.get("boss_name") or pokemon.name
+    reason = str(reward.get("reason") or "").strip()
+    tier = str(reward.get("tier") or "").strip()
+    if reason == "defeated":
+        headline = f"{boss_name} was defeated"
+    elif reason:
+        headline = f"{boss_name} raid ended ({reason.replace('_', ' ')})"
+    else:
+        headline = f"{boss_name} raid reward ready"
+    tier_text = f" a {tier} reward" if tier else " a raid reward"
+    return f"{headline} — you earned{tier_text}: {pokemon.name} joined your team!"
