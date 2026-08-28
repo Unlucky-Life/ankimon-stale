@@ -215,9 +215,13 @@ State both limits in the UI rather than implying PvP is fully verified.
    reaches, so the engine core needed no change.
 2. ~~Canonical outcome ordering (D2)~~ — done, as insurance; see the
    measurement above.
-3. Canonical team/state serializer + `state_hash` (D4), shared by both the
-   submit path and the tests.
-4. `engine_version` computation (addon version + engine data hash) (D3).
+3. ~~Canonical team/state serializer + `state_hash` (D4)~~ — done. Zero
+   side conditions are dropped: the engine's `defaultdict(int)` grows keys
+   just by being read, so one client can end a turn holding `'tailwind': 0`
+   where the other holds nothing, with no difference in play.
+4. ~~`engine_version` computation (D3)~~ — done. Only `moves.json` and
+   `pokedex.json` are hashed, and line endings are normalized, so a CRLF
+   checkout does not refuse matches against an LF one.
 5. Resolution poller in `MultiplayerController`: when state carries an open
    `resolution` the client has not submitted, simulate and submit — on the
    background thread, never in the review flow.
