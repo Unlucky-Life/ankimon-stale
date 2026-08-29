@@ -547,9 +547,10 @@ class MultiplayerWindow(QDialog):
         if not opponent:
             tooltip("Selected friend cannot be challenged.")
             return
+        version, team = self.controller.pvp_match_credentials()
         self._run(
             f"Challenging {friend.get('username', opponent)}...",
-            lambda: self.controller.api.challenge_friend(opponent),
+            lambda: self.controller.api.challenge_friend(opponent, version, team),
         )
 
     def _on_challenge(self):
@@ -560,9 +561,10 @@ class MultiplayerWindow(QDialog):
         if not opponent:
             tooltip("Enter a username to challenge.")
             return
+        version, team = self.controller.pvp_match_credentials()
         self._run(
             f"Challenging {opponent}...",
-            lambda: self.controller.api.challenge_friend(opponent),
+            lambda: self.controller.api.challenge_friend(opponent, version, team),
         )
 
     def _on_respond(self, accept: bool):
@@ -570,9 +572,12 @@ class MultiplayerWindow(QDialog):
         if not match or not match.get("incoming_challenge"):
             tooltip("Select an incoming challenge first.")
             return
+        version, team = self.controller.pvp_match_credentials()
         self._run(
             "Sending response...",
-            lambda: self.controller.api.respond_to_challenge(match["id"], accept),
+            lambda: self.controller.api.respond_to_challenge(
+                match["id"], accept, version, team
+            ),
         )
 
     def _on_commit_turn(self):

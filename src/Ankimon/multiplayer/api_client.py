@@ -231,14 +231,36 @@ class MultiplayerApiClient:
 
     # --- Friend battles ---------------------------------------------------
 
-    def challenge_friend(self, opponent_username: str) -> dict:
-        return self._request(
-            "POST", "/matches", payload={"opponent": opponent_username}
-        )
+    def challenge_friend(
+        self,
+        opponent_username: str,
+        engine_version: Optional[str] = None,
+        team: Optional[str] = None,
+    ) -> dict:
+        # engine_version lets the server refuse a version-skewed match up
+        # front, with "update Ankimon" rather than a mid-battle suspension;
+        # team is uploaded once here so no round can smuggle in an edit.
+        payload = {"opponent": opponent_username}
+        if engine_version:
+            payload["engine_version"] = engine_version
+        if team:
+            payload["team"] = team
+        return self._request("POST", "/matches", payload=payload)
 
-    def respond_to_challenge(self, match_id: str, accept: bool) -> dict:
+    def respond_to_challenge(
+        self,
+        match_id: str,
+        accept: bool,
+        engine_version: Optional[str] = None,
+        team: Optional[str] = None,
+    ) -> dict:
+        payload = {"accept": accept}
+        if accept and engine_version:
+            payload["engine_version"] = engine_version
+        if accept and team:
+            payload["team"] = team
         return self._request(
-            "POST", f"/matches/{match_id}/respond", payload={"accept": accept}
+            "POST", f"/matches/{match_id}/respond", payload=payload
         )
 
     def submit_turn(self, match_id: str, move: str) -> dict:
@@ -248,3 +270,31 @@ class MultiplayerApiClient:
             payload={"move": move},
             idempotency_key=str(uuid.uuid4()),
         )
+
+    def submit_round_result(
+        self,
+        match_id: str,
+        round_number: int,
+        state_hash: str,
+        hp_after: dict,
+        engine_version: Optional[str] = None,
+        log_digest: Optional[str] = None,
+    ) -> dict:
+        """Report this client's simulation of an open round.
+
+        Idempotent per (match, round, player) server-side, so a retry after a
+        dropped response is safe — but only with an identical body: reporting
+        a *different* result for the same round suspends the match.
+        """
+        payload = {"state_hash": state_hash, "hp_after": hp_after}
+        if engine_version:
+            payload["engine_version"] = engine_version
+        if log_digest:
+            payload["log_digest"] = log_digest
+        return self._request(
+            "POST", f"/matches/{match_id}/rounds/{round_number}/result", payload=payload
+        )
+
+    def claim_match(self, match_id: str) -> dict:
+        """Claim a stalled battle on forfeit, once the grace window passed."""
+        return self._request("POST", f"/matches/{match_id}/claim")

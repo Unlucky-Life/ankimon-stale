@@ -11,6 +11,7 @@ import math
 from .battle import Move
 from .objects import Pokemon, State, StateMutator, Side
 from .helpers import normalize_name
+from .canonical import canonical_outcome_key
 from .find_state_instructions import get_all_state_instructions
 from ..pyobj.error_handler import show_warning_with_traceback
 
@@ -67,18 +68,6 @@ def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None]=None) -> Sid
         future_sight=(0, 0),
     )
     return side
-
-def canonical_outcome_key(outcome):
-    """Total order over one turn's possible outcomes.
-
-    Ordering must depend only on the outcome's content, never on the order the
-    engine happened to generate it in, so two clients drawing with the same
-    seed land on the same outcome. The instruction list is tuples of strings
-    and ints, so its repr is a faithful and stable key; the percentage breaks
-    ties between outcomes with identical instructions.
-    """
-    return (repr(outcome.instructions), outcome.percentage)
-
 
 def simulate_battle_with_poke_engine(
     main_pokemon: Pokemon,
