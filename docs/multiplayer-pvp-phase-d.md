@@ -1,6 +1,9 @@
 # Phase D — peer-verified poke_engine PvP resolution
 
-Status: design. Nothing here is implemented yet.
+Status: implemented except the UI states and the flag flip. The four
+determinism items (D1-D4), the server protocol and the client's resolution
+poller have landed; what remains is client work item 6 and turning
+`PVP_HUMAN_ENABLED` on.
 
 Phase 2 shipped async PvP on a **placeholder** resolver: the Go server
 derives damage in `[12, 20]` from `(matchID, round, move)` (`pvpDamage` in
@@ -222,22 +225,46 @@ State both limits in the UI rather than implying PvP is fully verified.
 4. ~~`engine_version` computation (D3)~~ — done. Only `moves.json` and
    `pokedex.json` are hashed, and line endings are normalized, so a CRLF
    checkout does not refuse matches against an LF one.
-5. Resolution poller in `MultiplayerController`: when state carries an open
-   `resolution` the client has not submitted, simulate and submit — on the
-   background thread, never in the review flow.
+5. ~~Resolution poller in `MultiplayerController`~~ — done. Work is keyed
+   by `(match, round, attempt)`, so a replay is new work and a slow poll
+   cannot start the same round twice, and the resolver is imported lazily
+   because it pulls in the whole move dataset.
+
+   Two things the implementation had to settle that this design did not:
+
+   - **Which side is which.** Both clients put the *challenger* on the
+     state's `user` side. A client that put itself there would build the
+     mirror image of its opponent's battle, and every honest round would
+     disagree. The server tells each client which it is
+     (`you_are_challenger`).
+   - **Where the between-round state lives.** The server stores HP and
+     hashes, not Pokemon state, so each client keeps its own and carries it
+     forward. Losing it (fresh profile, cleared cache) does not let a round
+     be faked — the rebuilt-from-teams state disagrees with the opponent and
+     the battle suspends — but it does mean a cache loss mid-match ends the
+     match with no winner. Moving the carried state server-side would fix
+     that and is the obvious follow-up if it turns out to bite.
 6. UI: "waiting for opponent to confirm", "round replayed", "match
    suspended — no rating change" states. A silent suspension reads as a bug.
 
 ## Server work items
 
-1. `Match.Resolution` (round, seed, revealed moves, deadline, attempt,
-   submissions map) and its persistence.
-2. Seed generation (`crypto/rand`, not the balance-file PRNG helpers).
-3. The result endpoint: idempotency, comparison, replay, void, suspend.
-4. `engine_version` on match creation; the mismatch rejection message.
-5. Result-report deadline sweeping, alongside the existing raid sweep.
-6. Keep `pvpDamage` for bot matches — bots stay server-resolved, since a bot
-   has no client to verify with.
+All six are done (ankimon-multiplayer-api, `feat/pvp-peer-resolution`).
+
+1. ~~`Match.Resolution` and its persistence.~~
+2. ~~Seed generation (`crypto/rand`).~~
+3. ~~The result endpoint: idempotency, comparison, replay, void, suspend.~~
+4. ~~`engine_version` on match creation; the mismatch rejection message.~~
+   Also checked when the challenge is *answered*, since the opponent's
+   version is not known until then.
+5. ~~Result-report deadline sweeping.~~ A stalled match is claimable on
+   forfeit only after a 24 h grace window, and only by the player who did
+   report.
+6. ~~Keep `pvpDamage` for bot matches.~~
+
+One rule the design left implicit and the implementation had to make
+explicit: a matching `state_hash` with *differing* `hp_after` is still a
+mismatch. Trusting either number would be picking a side.
 
 ## Test plan
 
@@ -254,6 +281,14 @@ State both limits in the UI rather than implying PvP is fully verified.
   produces the same `state_hash`. This is the test that proves D1 landed.
 - Wild-battle regression: a fixed-seed wild battle produces identical output
   before and after the `rng` parameter is added.
+
+## What is left
+
+- Client work item 6: the "waiting for opponent to confirm", "round
+  replayed" and "match suspended - no rating change" UI states. The state
+  payload already carries everything they need (`resolution.submitted`,
+  `resolution.attempt`, `suspended_reason`, `claimable_at`).
+- Flipping `PVP_HUMAN_ENABLED`, under the condition below.
 
 ## Definition of done
 
