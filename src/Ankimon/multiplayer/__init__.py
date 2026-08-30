@@ -406,7 +406,17 @@ class MultiplayerController:
         """
         return self.state.setdefault("pvp_battle_states", {})
 
-    def _carried_state(self, match_id: str, round_number: int):
+    def _carried_state(self, match_id: str, round_number: int, resolution=None):
+        """The state this round continues from.
+
+        The server's copy wins: it is the one *both* clients reported at the
+        end of the last round, so it is the one this client's opponent will
+        also be simulating from. The local cache is the fallback for a
+        server that does not carry state yet.
+        """
+        from_server = (resolution or {}).get("carried_state")
+        if from_server:
+            return from_server
         carried = self._battle_states().get(match_id)
         if not carried or carried.get("after_round") != round_number - 1:
             return None
@@ -441,6 +451,9 @@ class MultiplayerController:
         # does not carry every round it ever played.
         live = {match.get("id") for match in matches if match.get("status") == "active"}
         self._resolving = {key for key in self._resolving if key[0] in live}
+        battle_states = self._battle_states()
+        for finished in [key for key in battle_states if key not in live]:
+            del battle_states[finished]
         for match in matches:
             resolution = match.get("resolution")
             if not resolution or match.get("status") != "active":
@@ -467,7 +480,7 @@ class MultiplayerController:
         i_am_challenger = bool(match.get("you_are_challenger"))
         challenger_name = username if i_am_challenger else opponent
         opponent_name = opponent if i_am_challenger else username
-        carried = self._carried_state(match_id, round_number)
+        carried = self._carried_state(match_id, round_number, resolution)
         challenger_team = match.get("your_team") if i_am_challenger else match.get("opponent_team")
         opponent_team = match.get("opponent_team") if i_am_challenger else match.get("your_team")
 
@@ -494,15 +507,17 @@ class MultiplayerController:
                 self._resolving.discard(key)
                 self.logger.log("error", f"PvP round resolution failed: {exc}")
                 return
+            ending_state = pvp_resolution.dump_state(result.state)
             self._battle_states()[match_id] = {
                 "after_round": round_number,
-                "state": pvp_resolution.dump_state(result.state),
+                "state": ending_state,
             }
             self._save_state()
             self._submit_round_result(
                 match_id,
                 round_number,
                 result,
+                ending_state,
                 {
                     challenger_name: result.hp[pvp_resolution.CHALLENGER],
                     opponent_name: result.hp[pvp_resolution.OPPONENT],
@@ -512,7 +527,7 @@ class MultiplayerController:
 
         mw.taskman.run_in_background(task, on_done)
 
-    def _submit_round_result(self, match_id, round_number, result, hp_after, key):
+    def _submit_round_result(self, match_id, round_number, result, ending_state, hp_after, key):
         def task():
             return self.api.submit_round_result(
                 match_id,
@@ -521,6 +536,10 @@ class MultiplayerController:
                 hp_after,
                 engine_version=self._engine_version(),
                 log_digest=result.log_digest,
+                # Reported so the server can hand it back next round. It is
+                # kept only if the opponent reported the same one, so a
+                # client cannot write the battle it would like to continue.
+                state=ending_state,
             )
 
         def on_done(future):
