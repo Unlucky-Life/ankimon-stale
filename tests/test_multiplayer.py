@@ -785,3 +785,42 @@ def test_an_engine_failure_is_logged_and_not_reported(multiplayer_module, monkey
     # unconfirmed round stalls, it does not decide the battle.
     assert submissions == []
     assert any(level == "warning" for level, _ in controller.logger.entries)
+
+
+def _toast_for_match_change(module, old_match, new_match):
+    controller = _make_controller(module)
+    controller.state = {"pvp": {"matches": [old_match]}}
+    controller._derive_toasts(
+        {"pvp": {"matches": [old_match]}}, {"pvp": {"matches": [new_match]}}
+    )
+    return controller.drain_toast() or ""
+
+
+def test_toast_explains_a_suspended_battle(multiplayer_module):
+    # No winner and no explanation reads as the addon losing the match.
+    message = _toast_for_match_change(
+        multiplayer_module,
+        _open_match(),
+        _open_match(
+            status="suspended",
+            resolution=None,
+            suspended_reason="the two players' battle results kept disagreeing",
+        ),
+    )
+    assert "suspended" in message
+    assert "kept disagreeing" in message
+    assert "No winner" in message
+
+
+def test_toast_says_a_replayed_round_cost_nothing(multiplayer_module):
+    replayed = _open_match()
+    replayed["resolution"] = dict(replayed["resolution"], attempt=2)
+    message = _toast_for_match_change(multiplayer_module, _open_match(), replayed)
+    assert "replayed" in message and "no damage" in message
+
+
+def test_toast_names_the_player_a_stalled_battle_is_waiting_on(multiplayer_module):
+    message = _toast_for_match_change(
+        multiplayer_module, _open_match(), _open_match(status="stalled")
+    )
+    assert "gary" in message and "on hold" in message
