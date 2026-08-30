@@ -1,9 +1,9 @@
 # Phase D — peer-verified poke_engine PvP resolution
 
-Status: implemented except the UI states and the flag flip. The four
-determinism items (D1-D4), the server protocol and the client's resolution
-poller have landed; what remains is client work item 6 and turning
-`PVP_HUMAN_ENABLED` on.
+Status: implemented except the flag flip. The four
+determinism items (D1-D4), the server protocol, the client's resolution
+poller and its UI states have landed; what remains is turning
+`PVP_HUMAN_ENABLED` on, under the condition at the end of this document.
 
 Phase 2 shipped async PvP on a **placeholder** resolver: the Go server
 derives damage in `[12, 20]` from `(matchID, round, move)` (`pvpDamage` in
@@ -244,8 +244,12 @@ State both limits in the UI rather than implying PvP is fully verified.
      the battle suspends — but it does mean a cache loss mid-match ends the
      match with no winner. Moving the carried state server-side would fix
      that and is the obvious follow-up if it turns out to bite.
-6. UI: "waiting for opponent to confirm", "round replayed", "match
-   suspended — no rating change" states. A silent suspension reads as a bug.
+6. ~~UI states~~ — done, in `multiplayer/pvp_status.py` (plain functions
+   over the state dict, so the wording is testable without Qt) plus
+   reviewer toasts, since a player answering cards will not have the
+   window open. A suspension always carries its reason and says no one
+   won; a stalled battle counts down to its claim and only offers the
+   button once the grace window has actually passed.
 
 ## Server work items
 
@@ -284,11 +288,9 @@ mismatch. Trusting either number would be picking a side.
 
 ## What is left
 
-- Client work item 6: the "waiting for opponent to confirm", "round
-  replayed" and "match suspended - no rating change" UI states. The state
-  payload already carries everything they need (`resolution.submitted`,
-  `resolution.attempt`, `suspended_reason`, `claimable_at`).
-- Flipping `PVP_HUMAN_ENABLED`, under the condition below.
+Flipping `PVP_HUMAN_ENABLED`, under the condition below. Every code item on
+both sides is done; what is missing is evidence, not code — two real clients
+on two real machines agreeing on a round.
 
 ## Definition of done
 
