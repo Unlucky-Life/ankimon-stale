@@ -237,13 +237,15 @@ State both limits in the UI rather than implying PvP is fully verified.
      mirror image of its opponent's battle, and every honest round would
      disagree. The server tells each client which it is
      (`you_are_challenger`).
-   - **Where the between-round state lives.** The server stores HP and
-     hashes, not Pokemon state, so each client keeps its own and carries it
-     forward. Losing it (fresh profile, cleared cache) does not let a round
-     be faked — the rebuilt-from-teams state disagrees with the opponent and
-     the battle suspends — but it does mean a cache loss mid-match ends the
-     match with no winner. Moving the carried state server-side would fix
-     that and is the obvious follow-up if it turns out to bite.
+   - **Where the between-round state lives.** Originally the client, since
+     the server stored only HP and hashes — which meant a lost cache (fresh
+     profile, reinstall) cost the match to a suspension through no fault of
+     the player's. Now both clients report the end-of-round state and the
+     server keeps it **only when the two are identical**, handing it back
+     with the next round. That costs no trust: it is exactly as verified as
+     the HP beside it, and the server never reads it. Agreeing on a round's
+     damage but not on the state it leaves behind is treated as a mismatch -
+     the same disagreement, one round early.
 6. ~~UI states~~ — done, in `multiplayer/pvp_status.py` (plain functions
    over the state dict, so the wording is testable without Qt) plus
    reviewer toasts, since a player answering cards will not have the
@@ -291,6 +293,20 @@ mismatch. Trusting either number would be picking a side.
 Flipping `PVP_HUMAN_ENABLED`, under the condition below. Every code item on
 both sides is done; what is missing is evidence, not code — two real clients
 on two real machines agreeing on a round.
+
+`tools/pvp_determinism_probe.py` is how that evidence is collected: both
+machines run it and compare one fingerprint. A mismatch is classified rather
+than merely reported - an `engine_version` difference is a D3 skew, while the
+same version producing a different result is D4 and names the round that
+differs.
+
+What has been verified so far, and what it does not cover: the protocol runs
+end to end against the real server binary driven by the addon's own resolver
+(29 checks - skew refusal, role assignment, both clients agreeing, one report
+not resolving, idempotent retry, mismatch to replay to suspension with the
+token refunded, and a cache-less client continuing from the server's carried
+state). All of it on one machine, which is exactly the D3/D4 blind spot the
+probe exists to cover.
 
 ## Definition of done
 
