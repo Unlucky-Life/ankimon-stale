@@ -286,7 +286,16 @@ class MultiplayerController:
     @staticmethod
     def _sync_reviewer_enemy(match: dict, enemy_pokemon) -> None:
         opponent = match.get("opponent_pokemon") or {}
-        hp = max(0, int(opponent.get("hp") or 0))
+        # A missing HP field is unknown, not zero: reading it as 0 would
+        # faint an opponent the encounter picker still treats as alive.
+        reported_hp = opponent.get("hp")
+        if reported_hp is None:
+            reported_hp = match.get("opponent_hp")
+        if reported_hp is None:
+            reported_hp = getattr(enemy_pokemon, "hp", None)
+        if reported_hp is None:
+            return
+        hp = max(0, int(reported_hp))
         max_hp = max(1, int(opponent.get("max_hp") or hp or 1))
         enemy_pokemon.hp = hp
         enemy_pokemon.current_hp = hp
@@ -423,6 +432,13 @@ class MultiplayerController:
     def refresh_state(self, on_finished: Optional[Callable] = None):
         """Fetch state without sending events (idle poll / window refresh)."""
         if not self.enabled:
+            if on_finished:
+                on_finished(False)
+            return
+        if self._turn_submissions_inflight:
+            # A poll started before a move lands would answer with the
+            # pre-move snapshot and roll the committed move and the HP bar
+            # back on screen. The turn's own response carries fresher state.
             if on_finished:
                 on_finished(False)
             return
