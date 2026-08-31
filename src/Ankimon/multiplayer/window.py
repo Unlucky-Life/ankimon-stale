@@ -2,8 +2,8 @@
 
 Opened from the Ankimon menu. All server calls go through
 MultiplayerController.run_action (background thread + main-thread callback),
-so the dialog never freezes the UI. This is also where PvP moves are
-committed, deliberately outside the reviewer.
+so the dialog never freezes the UI. Friend-battle moves come from the normal
+reviewer battle loop.
 """
 
 from typing import Optional
@@ -13,7 +13,6 @@ from PyQt6.QtCore import QByteArray, QSize
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -612,16 +611,13 @@ class MultiplayerWindow(QDialog):
         self.match_list.currentRowChanged.connect(lambda _row: self._update_turn_controls())
         layout.addWidget(self.match_list)
 
-        turn_row = QHBoxLayout()
-        turn_row.addWidget(QLabel("Move:"))
-        self.move_combo = QComboBox()
-        attacks = getattr(self.controller.main_pokemon, "attacks", None) or []
-        self.move_combo.addItems([str(attack) for attack in attacks])
-        turn_row.addWidget(self.move_combo, stretch=1)
-        self.commit_button = QPushButton("Commit turn")
-        self.commit_button.clicked.connect(self._on_commit_turn)
-        turn_row.addWidget(self.commit_button)
-        layout.addLayout(turn_row)
+        reviewer_hint = QLabel(
+            "Active battles continue in the reviewer. Answer cards to attack; "
+            "a charged turn is submitted automatically using that attack."
+        )
+        reviewer_hint.setWordWrap(True)
+        reviewer_hint.setStyleSheet("color: #5D6D7E; font-style: italic;")
+        layout.addWidget(reviewer_hint)
 
         respond_row = QHBoxLayout()
         self.accept_button = QPushButton("Accept challenge")
@@ -691,27 +687,6 @@ class MultiplayerWindow(QDialog):
         self._run(
             "Sending response...",
             lambda: self.controller.api.respond_to_challenge(match["id"], accept),
-        )
-
-    def _on_commit_turn(self):
-        match = self._selected_match()
-        if not match or match.get("status") != "active":
-            tooltip("Select an active battle first.")
-            return
-        if match.get("your_move_committed"):
-            tooltip("You already committed a move this round.")
-            return
-        tokens = (self.controller.state.get("pvp") or {}).get("tokens", 0)
-        if tokens < 1:
-            tooltip("No turn tokens - answer more cards to charge one!")
-            return
-        move = self.move_combo.currentText()
-        if not move:
-            tooltip("Your Pokemon has no moves to use.")
-            return
-        self._run(
-            f"Committing {move}...",
-            lambda: self.controller.api.submit_turn(match["id"], move),
         )
 
     # --- Shared plumbing --------------------------------------------------
@@ -863,14 +838,8 @@ class MultiplayerWindow(QDialog):
     def _update_turn_controls(self):
         match = self._selected_match()
         is_incoming = bool(match and match.get("incoming_challenge"))
-        can_commit = bool(
-            match
-            and match.get("status") == "active"
-            and not match.get("your_move_committed")
-        )
         self.accept_button.setEnabled(is_incoming)
         self.decline_button.setEnabled(is_incoming)
-        self.commit_button.setEnabled(can_commit)
 
     def _update_pvp_gate_controls(self):
         human_enabled = self._human_pvp_enabled()

@@ -204,6 +204,137 @@ def _make_controller(module):
     )
 
 
+def _active_match(**overrides):
+    match = {
+        "id": "match-1",
+        "opponent": "gary",
+        "status": "active",
+        "your_move_committed": False,
+        "opponent_pokemon": {
+            "id": 25,
+            "name": "pikachu",
+            "hp": 100,
+            "max_hp": 100,
+        },
+    }
+    match.update(overrides)
+    return match
+
+
+class ImmediateFuture:
+    def __init__(self, value):
+        self.value = value
+
+    def result(self):
+        return self.value
+
+
+def test_new_active_match_replaces_encounter_on_next_review(multiplayer_module):
+    starts = []
+    controller = multiplayer_module.MultiplayerController(
+        FakeSettings(**{"multiplayer.enabled": True}),
+        FakeLogger(),
+        types.SimpleNamespace(level=10),
+        start_reviewer_battle=lambda: starts.append(True) or True,
+    )
+    controller.state = {"pvp": {"matches": []}}
+
+    controller._apply_state({"pvp": {"matches": [_active_match()]}})
+
+    assert starts == []
+    controller.on_card_reviewed("good", 4)
+    assert starts == [True]
+
+
+def test_again_does_not_charge_local_turn_progress(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.state = {"pvp": {"tokens": 0, "token_progress": 9, "matches": []}}
+
+    controller.on_card_reviewed("again", 3)
+
+    assert controller.state["pvp"]["token_progress"] == 9
+    assert controller.state["pvp"]["tokens"] == 0
+
+
+def test_reviewer_attack_submits_active_opponent_move(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.state = {
+        "pvp": {"tokens": 1, "token_progress": 0, "matches": [_active_match()]}
+    }
+    controller._confirmed_pvp_tokens = 1
+    submitted = []
+    completed_match = _active_match(
+        status="finished",
+        your_move_committed=True,
+        opponent_pokemon={
+            "id": 25,
+            "name": "pikachu",
+            "hp": 0,
+            "max_hp": 100,
+        },
+    )
+    completed_state = {
+        "pvp": {"tokens": 0, "token_progress": 0, "matches": [completed_match]}
+    }
+    controller.api.submit_turn = (
+        lambda match_id, move: submitted.append((match_id, move)) or completed_state
+    )
+    refreshes = []
+    controller._refresh_reviewer_battle = lambda: refreshes.append(True) or True
+
+    def run_immediately(task, on_done):
+        on_done(ImmediateFuture(task()))
+
+    multiplayer_module.mw.taskman.run_in_background = run_immediately
+    enemy = types.SimpleNamespace(
+        id=25, tier="PvP: gary", hp=73, current_hp=73, max_hp=100,
+        battle_status="fighting",
+    )
+
+    controller.on_reviewer_attack("thunderbolt", enemy)
+
+    assert submitted == [("match-1", "thunderbolt")]
+    assert enemy.hp == 0
+    assert enemy.current_hp == 0
+    assert enemy.battle_status == "fainted"
+    assert refreshes == [True]
+    assert controller._pending_reviewer_match_id == "match-1"
+
+
+def test_reviewer_attack_ignores_wild_encounter(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.state = {
+        "pvp": {"tokens": 1, "token_progress": 0, "matches": [_active_match()]}
+    }
+    submitted = []
+    controller.api.submit_turn = lambda match_id, move: submitted.append((match_id, move))
+    enemy = types.SimpleNamespace(id=25, tier="Normal")
+
+    controller.on_reviewer_attack("thunderbolt", enemy)
+
+    assert submitted == []
+
+
+def test_reviewer_attack_waits_for_server_confirmed_token(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.state = {
+        "pvp": {"tokens": 1, "token_progress": 0, "matches": [_active_match()]}
+    }
+    # The displayed balance can be optimistic while review events are still
+    # queued; only _apply_state advances this confirmed server balance.
+    controller._confirmed_pvp_tokens = 0
+    submitted = []
+    controller.api.submit_turn = lambda match_id, move: submitted.append((match_id, move))
+    enemy = types.SimpleNamespace(
+        id=25, tier="PvP: gary", hp=100, current_hp=100, max_hp=100,
+        battle_status="fighting",
+    )
+
+    controller.on_reviewer_attack("thunderbolt", enemy)
+
+    assert submitted == []
+
+
 def test_apply_state_merges_friends_and_raid_rooms(multiplayer_module):
     controller = _make_controller(multiplayer_module)
     controller.state = {}
@@ -363,6 +494,24 @@ def test_hud_fragment_with_active_raid(hud_module):
     assert "Articuno" in html
     assert "50%" in html
     assert "ankimon-mp-raid" in css
+
+
+def test_hud_tells_player_when_reviewer_attack_is_ready(hud_module):
+    state = {
+        "pvp": {
+            "tokens": 1,
+            "matches": [
+                {
+                    "status": "active",
+                    "your_move_committed": False,
+                }
+            ],
+        }
+    }
+
+    html, _css = hud_module.build_hud_fragment(state)
+
+    assert "ATTACK READY" in html
 
 
 # --- Raid reward claiming ---------------------------------------------------

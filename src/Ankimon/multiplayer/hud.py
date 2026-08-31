@@ -72,7 +72,7 @@ def build_hud_fragment(state: dict) -> Optional[Tuple[str, str]]:
             for i in range(MAX_TOKENS)
         )
         ready_html = (
-            '<span id="ankimon-mp-turn">YOUR TURN</span>'
+            '<span id="ankimon-mp-turn">ATTACK READY</span>'
             if turn_ready and tokens > 0
             else ""
         )

@@ -46,11 +46,23 @@ BOSS_TOAST_THRESHOLDS = (75, 50, 25)
 _controller = None
 
 
-def init_multiplayer(settings_obj, logger, main_pokemon):
+def init_multiplayer(
+    settings_obj,
+    logger,
+    main_pokemon,
+    start_reviewer_battle: Optional[Callable[[], bool]] = None,
+    refresh_reviewer_battle: Optional[Callable[[], bool]] = None,
+):
     """Create the singleton controller. Called once from addon startup."""
     global _controller
     if _controller is None:
-        _controller = MultiplayerController(settings_obj, logger, main_pokemon)
+        _controller = MultiplayerController(
+            settings_obj,
+            logger,
+            main_pokemon,
+            start_reviewer_battle=start_reviewer_battle,
+            refresh_reviewer_battle=refresh_reviewer_battle,
+        )
 
     caller_frame = inspect.currentframe().f_back
     caller_globals = caller_frame.f_globals if caller_frame is not None else {}
@@ -80,13 +92,45 @@ def notify_card_reviewed(grade: str, time_elapsed: int):
             pass
 
 
+def notify_reviewer_attack(move, enemy_pokemon):
+    """Submit a PvP move produced by the normal reviewer battle loop."""
+    if _controller is None:
+        return
+    try:
+        _controller.on_reviewer_attack(move, enemy_pokemon)
+    except Exception as e:
+        try:
+            _controller.logger.log("error", f"Ankimon multiplayer turn: {e}")
+        except Exception:
+            pass
+
+
+def is_reviewer_pvp_enemy(enemy_pokemon) -> bool:
+    """Whether the reviewer is currently showing the active PvP opponent."""
+    if _controller is None:
+        return False
+    try:
+        return _controller.is_reviewer_pvp_enemy(enemy_pokemon)
+    except Exception:
+        return False
+
+
 class MultiplayerController:
-    def __init__(self, settings_obj, logger, main_pokemon):
+    def __init__(
+        self,
+        settings_obj,
+        logger,
+        main_pokemon,
+        start_reviewer_battle: Optional[Callable[[], bool]] = None,
+        refresh_reviewer_battle: Optional[Callable[[], bool]] = None,
+    ):
         self.settings = settings_obj
         self.logger = logger
         self.main_pokemon = main_pokemon
         self.api = MultiplayerApiClient(settings_obj)
         self.outbox = Outbox()
+        self._start_reviewer_battle = start_reviewer_battle
+        self._refresh_reviewer_battle = refresh_reviewer_battle
 
         self.state = self._load_state()
         self._toasts = []
@@ -94,6 +138,11 @@ class MultiplayerController:
         self._flush_inflight = False
         self._auth_failed = False
         self._seconds_since_sync = 0
+        self._pending_reviewer_match_id = None
+        self._turn_submissions_inflight = set()
+        self._confirmed_pvp_tokens = int(
+            (self.state.get("pvp") or {}).get("tokens", 0) or 0
+        )
 
         self._timer = QTimer(mw)
         self._timer.timeout.connect(self._on_timer)
@@ -129,17 +178,126 @@ class MultiplayerController:
             },
         )
         # Local, display-only token progress; the server value wins on sync.
-        pvp = self.state.setdefault("pvp", {})
-        progress = pvp.get("token_progress", 0) + 1
-        if progress >= CARDS_PER_TOKEN:
-            progress = 0
-            pvp["tokens"] = min(pvp.get("tokens", 0) + 1, 3)
-            if self._has_active_match():
-                self._queue_toast("PvP turn token charged!")
-        pvp["token_progress"] = progress
+        # The server only counts graded cards, so Again must not make the
+        # reviewer try to spend a token that does not exist remotely.
+        if grade != "again":
+            pvp = self.state.setdefault("pvp", {})
+            progress = pvp.get("token_progress", 0) + 1
+            if progress >= CARDS_PER_TOKEN:
+                progress = 0
+                pvp["tokens"] = min(pvp.get("tokens", 0) + 1, 3)
+                if self._has_active_match():
+                    self._queue_toast("PvP turn charged — attack in the reviewer!")
+            pvp["token_progress"] = progress
+
+        self._start_pending_reviewer_battle()
 
         if self.outbox.pending_count() >= FLUSH_EVENT_THRESHOLD:
             self.flush_soon()
+
+    def on_reviewer_attack(self, move, enemy_pokemon):
+        """Commit the move that the regular reviewer battle just used.
+
+        This deliberately schedules the request from the normal card-answer
+        hook; the reviewer never waits for the network. The enemy marker
+        prevents an active match from consuming turns while a stale wild
+        encounter is still on screen.
+        """
+        if not self.enabled:
+            return
+        match = self._match_for_reviewer_enemy(enemy_pokemon)
+        if match is None or match.get("your_move_committed"):
+            return
+        match_id = match.get("id")
+        if not match_id or match_id in self._turn_submissions_inflight:
+            return
+        self._sync_reviewer_enemy(match, enemy_pokemon)
+        # Local token progress is optimistic until the queued card batch has
+        # reached the API. Spending only the last server-confirmed balance
+        # avoids a guaranteed 409 on the card that visually charges a token.
+        if self._confirmed_pvp_tokens < 1:
+            return
+
+        if isinstance(move, dict):
+            move = move.get("name") or move.get("id") or ""
+        move = str(move or "").strip()
+        if not move:
+            return
+
+        self._turn_submissions_inflight.add(match_id)
+
+        def task():
+            return self.api.submit_turn(match_id, move)
+
+        def on_done(future):
+            self._turn_submissions_inflight.discard(match_id)
+            try:
+                state = future.result()
+            except MultiplayerAuthError:
+                self._handle_auth_failure()
+                return
+            except Exception as exc:
+                self.logger.log("warning", f"Could not submit reviewer PvP turn: {exc}")
+                return
+            self._apply_state(state)
+            fresh_match = self._pvp_match_by_id(state, match_id)
+            if fresh_match is not None:
+                self._sync_reviewer_enemy(fresh_match, enemy_pokemon)
+                if self._refresh_reviewer_battle is not None:
+                    try:
+                        self._refresh_reviewer_battle()
+                    except Exception as exc:
+                        self.logger.log(
+                            "warning", f"Could not refresh reviewer PvP battle: {exc}"
+                        )
+
+        mw.taskman.run_in_background(task, on_done)
+
+    def is_reviewer_pvp_enemy(self, enemy_pokemon) -> bool:
+        match = self._match_for_reviewer_enemy(enemy_pokemon)
+        if match is None:
+            return False
+        self._sync_reviewer_enemy(match, enemy_pokemon)
+        return True
+
+    def _match_for_reviewer_enemy(self, enemy_pokemon) -> Optional[dict]:
+        match = self._active_pvp_match()
+        if match is None:
+            return None
+        opponent = match.get("opponent_pokemon") or {}
+        if not str(getattr(enemy_pokemon, "tier", "")).startswith("PvP:"):
+            return None
+        if int(getattr(enemy_pokemon, "id", 0) or 0) != int(opponent.get("id") or 0):
+            return None
+        return match
+
+    @staticmethod
+    def _sync_reviewer_enemy(match: dict, enemy_pokemon) -> None:
+        opponent = match.get("opponent_pokemon") or {}
+        hp = max(0, int(opponent.get("hp") or 0))
+        max_hp = max(1, int(opponent.get("max_hp") or hp or 1))
+        enemy_pokemon.hp = hp
+        enemy_pokemon.current_hp = hp
+        enemy_pokemon.max_hp = max_hp
+        enemy_pokemon.battle_status = "fainted" if hp <= 0 else "fighting"
+
+    @staticmethod
+    def _pvp_match_by_id(state: dict, match_id) -> Optional[dict]:
+        for match in (state.get("pvp") or {}).get("matches", []):
+            if match.get("id") == match_id:
+                return match
+        return None
+
+    def _start_pending_reviewer_battle(self):
+        if self._pending_reviewer_match_id is None or self._start_reviewer_battle is None:
+            return
+        try:
+            started = self._start_reviewer_battle()
+        except Exception as exc:
+            self.logger.log("warning", f"Could not open PvP encounter in reviewer: {exc}")
+            return
+        if started is not False:
+            self._pending_reviewer_match_id = None
 
     # --- Background sync -----------------------------------------------------
 
@@ -264,6 +422,7 @@ class MultiplayerController:
         if not isinstance(new_state, dict):
             return
         old_state = self.state
+        old_match = self._active_pvp_match(old_state)
         merged = dict(old_state)
         for key in (
             "raid",
@@ -276,9 +435,21 @@ class MultiplayerController:
         ):
             if key in new_state:
                 merged[key] = new_state[key]
+        new_match = self._active_pvp_match(merged)
+        old_match_id = old_match.get("id") if old_match is not None else None
+        new_match_id = new_match.get("id") if new_match is not None else None
+        if old_match_id != new_match_id:
+            # The same callback loads either the newly active opponent or,
+            # when a match ends, the next raid/wild encounter selected by
+            # the installed encounter wrapper.
+            self._pending_reviewer_match_id = new_match_id or old_match_id
         self._derive_toasts(old_state, merged)
         self._claim_raid_reward(merged.get("raid_reward"))
         self.state = merged
+        if "pvp" in new_state:
+            self._confirmed_pvp_tokens = int(
+                (merged.get("pvp") or {}).get("tokens", 0) or 0
+            )
         self._seconds_since_sync = 0
         self._save_state()
 
@@ -373,6 +544,15 @@ class MultiplayerController:
     def _has_active_match(self) -> bool:
         matches = (self.state.get("pvp") or {}).get("matches", [])
         return any(m.get("status") in ("active", "pending") for m in matches)
+
+    def _active_pvp_match(self, state: Optional[dict] = None) -> Optional[dict]:
+        pvp = (state if state is not None else self.state).get("pvp") or {}
+        for match in pvp.get("matches", []):
+            if match.get("status") == "active" and isinstance(
+                match.get("opponent_pokemon"), dict
+            ):
+                return match
+        return None
 
     # --- Reviewer-facing output --------------------------------------------------
 
