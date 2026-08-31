@@ -601,3 +601,20 @@ def generate_startup_files(base_path, base_user_path):  # Add base_user_path par
 
     return True
 
+
+def normalise_credentials(raw):
+    """Accept both the current dict credentials file and the legacy list one.
+
+    Older Ankimon versions wrote the leaderboard credentials as
+    [{"username": ...}, {"api_key": ...}]; collections that have not
+    re-entered their details since still carry that shape on disk.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        merged = {}
+        for entry in raw:
+            if isinstance(entry, dict):
+                merged.update(entry)
+        return merged
+    return None

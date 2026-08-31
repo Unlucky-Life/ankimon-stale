@@ -2,7 +2,7 @@ import sys
 import json
 from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton
 from aqt.utils import showInfo
-from ..resources import user_path_credentials, mypokemon_path
+from ..resources import user_path_credentials, mypokemon_path, normalise_credentials
 import json
 import requests
 from aqt import mw # import setting values direct from init file
@@ -74,9 +74,9 @@ def sync_data_to_leaderboard(data):
         try:
             # Load credentials from the file
             with open(user_path_credentials, "r", encoding="utf-8") as f:
-                credentials = json.load(f)
+                credentials = normalise_credentials(json.load(f)) or {}
 
-            # Extract username and api_key from the list of dictionaries
+            # Extract username and api_key from the credentials object
             username = credentials.get("username")
             api_key = credentials.get("api_key")
 
