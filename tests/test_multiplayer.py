@@ -422,6 +422,63 @@ def test_reviewer_attack_submits_active_opponent_move(multiplayer_module):
     assert controller._pending_reviewer_match_id == "match-1"
 
 
+def test_missing_opponent_hp_does_not_faint_the_enemy(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    match = _active_match()
+    match["opponent_hp"] = 55
+    match["opponent_pokemon"] = {"id": 25, "name": "pikachu", "max_hp": 100}
+    controller.state = {"pvp": {"matches": [match]}}
+    enemy = types.SimpleNamespace(
+        id=25, tier="PvP: gary", hp=70, current_hp=70, max_hp=100,
+        battle_status="fighting",
+    )
+
+    assert controller.is_reviewer_pvp_enemy(enemy) is True
+    # The match-level HP stands in; an absent field is unknown, not zero.
+    assert enemy.hp == 55
+    assert enemy.battle_status == "fighting"
+
+
+def test_unknown_opponent_hp_leaves_the_enemy_untouched(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    match = _active_match()
+    match["opponent_pokemon"] = {"id": 25, "name": "pikachu", "max_hp": 100}
+    controller.state = {"pvp": {"matches": [match]}}
+    enemy = types.SimpleNamespace(
+        id=25, tier="PvP: gary", hp=70, current_hp=70, max_hp=100,
+        battle_status="fighting",
+    )
+
+    assert controller.is_reviewer_pvp_enemy(enemy) is True
+    assert enemy.hp == 70
+    assert enemy.battle_status == "fighting"
+
+
+def test_poll_is_skipped_while_a_move_is_in_flight(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.state = {"pvp": {"matches": [_active_match()]}}
+    polls = []
+    controller.api.get_state = lambda: polls.append(True) or {}
+
+    def run_immediately(task, on_done):
+        on_done(ImmediateFuture(task()))
+
+    multiplayer_module.mw.taskman.run_in_background = run_immediately
+
+    controller._turn_submissions_inflight.add("match-1")
+    finished = []
+    controller.refresh_state(on_finished=finished.append)
+
+    # A poll answered from the pre-move snapshot would roll the committed
+    # move and the HP bar back on screen.
+    assert polls == []
+    assert finished == [False]
+
+    controller._turn_submissions_inflight.discard("match-1")
+    controller.refresh_state()
+    assert polls == [True]
+
+
 def test_reviewer_attack_picks_a_random_move(multiplayer_module):
     controller = _make_controller(multiplayer_module)
     controller.main_pokemon.attacks = ["thunderbolt", "quick attack", "iron tail"]
