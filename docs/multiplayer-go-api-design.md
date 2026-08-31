@@ -153,7 +153,7 @@ src/Ankimon/multiplayer/
     api_client.py   # requests.Session, timeouts, background dispatch
     outbox.py       # persistent event queue + batch flusher
     raid.py         # cached raid state, display-side contribution math
-    pvp.py          # turn-token meter, cached match state
+    pvp.py          # cached match state, attack readiness
     hud.py          # get_hud_fragment() -> (html, css) | None
 ```
 
@@ -179,8 +179,9 @@ if fragment:
 - **Raid:** a slim boss-HP bar (server HP % from the last flush/poll
   response) + guild damage today. Renders from the controller's cached
   state — a stale-by-30 s bar is fine; a blocked HUD render is not.
-- **PvP:** small token pips (2/3 charged) and a "turn ready" glow when a
-  round is waiting on the player.
+- **PvP:** the opponent's sprite and HP bar in the same panel shape as the
+  raid boss, with a line saying whether the next answered card attacks or
+  the round is waiting on the opponent.
 
 Updates land at the moments the HUD already refreshes
 (`reviewer_did_answer_card`, `reviewer_did_show_question`), so no new
@@ -217,7 +218,7 @@ or new render paths. Roughly in order of value-for-effort:
    sprite, HP bar, days remaining, "your guild dealt 12,400 today". This is
    the *pull* that gets players into a review session — seen before
    reviewing starts, zero impact during it. Same treatment for a pending
-   PvP turn ("Rival is waiting — 2 turn tokens ready").
+   PvP turn ("Rival is waiting — answer a card to attack").
 2. **Reviewer bottom-bar button.** The Catch button pattern
    (`__init__.py:1007`, `pycmd('catch')` + linkHandler override) supports a
    second button: `Raid 62%` (label updated from cached state on each HUD
@@ -234,8 +235,8 @@ or new render paths. Roughly in order of value-for-effort:
    the "look at what we're doing together" screen; the reviewer HUD stays
    minimal.
 5. **Session recap on `reviewer_will_end`.** The hook is already used
-   (`__init__.py:1066`). One toast — "Session: 214 raid dmg, 1 PvP token
-   earned" — as the player leaves the reviewer. Ends every session on a
+   (`__init__.py:1066`). One toast — "Session: 214 raid dmg, 6 PvP attacks"
+   — as the player leaves the reviewer. Ends every session on a
    visible multiplayer payoff without touching mid-review flow.
 6. **Trainer card + badges.** Add PvP rating / raid clears to the trainer
    card, and mint raid/PvP achievements through the existing
@@ -302,10 +303,15 @@ default 2, user-editable), and move choice can be manual
 
 ### PvP
 
-- **Decouple power from volume: turn tokens.** Answering X cards charges one
-  turn token; a player banks at most K tokens (e.g. 3). A match advances in
-  rounds — a round resolves only when *both* players have committed a turn.
-  Review volume controls how *fast* you play, never how *much* you hit.
+- **Decouple power from volume: one card, one attack.** *Implemented as of
+  2026-08-31.* A battle is fought in the reviewer: each graded (non-again)
+  card buys exactly one move, and unspent cards bank only up to 3 (enough to
+  cover the lag between answering and the move reaching the server, not
+  enough to cash a grind in as a burst). A match still advances in rounds —
+  a round resolves only when *both* players have committed. Review volume
+  controls how *fast* you play, never how *much* you hit. This replaced an
+  earlier turn-token meter (1 token per 10 cards), which made the first
+  round of a battle a ten-card wait.
 - **Normalize stats in ranked: league format.** Both teams are scaled to a
   reference level (e.g. 50) for ranked queues, so team composition and move
   choice are the skill expression. Offer an unscaled "open" queue for

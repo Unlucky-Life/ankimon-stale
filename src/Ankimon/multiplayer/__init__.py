@@ -15,6 +15,7 @@ Architecture (see docs/multiplayer-go-api-design.md):
 
 import inspect
 import json
+import random
 import threading
 from typing import Callable, Optional
 
@@ -39,18 +40,28 @@ FLUSH_EVENT_THRESHOLD = 20
 ACTIVE_POLL_SECONDS = 30
 IDLE_POLL_SECONDS = 300
 
-CARDS_PER_TOKEN = 10
-
 BOSS_TOAST_THRESHOLDS = (75, 50, 25)
 
 _controller = None
 
 
-def init_multiplayer(settings_obj, logger, main_pokemon):
+def init_multiplayer(
+    settings_obj,
+    logger,
+    main_pokemon,
+    start_reviewer_battle: Optional[Callable[[], bool]] = None,
+    refresh_reviewer_battle: Optional[Callable[[], bool]] = None,
+):
     """Create the singleton controller. Called once from addon startup."""
     global _controller
     if _controller is None:
-        _controller = MultiplayerController(settings_obj, logger, main_pokemon)
+        _controller = MultiplayerController(
+            settings_obj,
+            logger,
+            main_pokemon,
+            start_reviewer_battle=start_reviewer_battle,
+            refresh_reviewer_battle=refresh_reviewer_battle,
+        )
 
     caller_frame = inspect.currentframe().f_back
     caller_globals = caller_frame.f_globals if caller_frame is not None else {}
@@ -80,13 +91,59 @@ def notify_card_reviewed(grade: str, time_elapsed: int):
             pass
 
 
+def notify_reviewer_attack(enemy_pokemon):
+    """Submit this card's attack against the active PvP opponent."""
+    if _controller is None:
+        return
+    try:
+        _controller.on_reviewer_attack(enemy_pokemon)
+    except Exception as e:
+        try:
+            _controller.logger.log("error", f"Ankimon multiplayer turn: {e}")
+        except Exception:
+            pass
+
+
+def is_reviewer_pvp_enemy(enemy_pokemon) -> bool:
+    """Whether the reviewer is currently showing the active PvP opponent."""
+    if _controller is None:
+        return False
+    try:
+        return _controller.is_reviewer_pvp_enemy(enemy_pokemon)
+    except Exception:
+        return False
+
+
+def sync_reviewer_enemy(enemy_pokemon) -> bool:
+    """Copy the server's opponent HP onto the reviewer's enemy Pokemon.
+
+    Returns False when the reviewer is not showing the active opponent, so
+    callers can leave a wild encounter untouched.
+    """
+    if _controller is None:
+        return False
+    try:
+        return _controller.is_reviewer_pvp_enemy(enemy_pokemon)
+    except Exception:
+        return False
+
+
 class MultiplayerController:
-    def __init__(self, settings_obj, logger, main_pokemon):
+    def __init__(
+        self,
+        settings_obj,
+        logger,
+        main_pokemon,
+        start_reviewer_battle: Optional[Callable[[], bool]] = None,
+        refresh_reviewer_battle: Optional[Callable[[], bool]] = None,
+    ):
         self.settings = settings_obj
         self.logger = logger
         self.main_pokemon = main_pokemon
         self.api = MultiplayerApiClient(settings_obj)
         self.outbox = Outbox()
+        self._start_reviewer_battle = start_reviewer_battle
+        self._refresh_reviewer_battle = refresh_reviewer_battle
 
         self.state = self._load_state()
         self._toasts = []
@@ -94,6 +151,8 @@ class MultiplayerController:
         self._flush_inflight = False
         self._auth_failed = False
         self._seconds_since_sync = 0
+        self._pending_reviewer_match_id = None
+        self._turn_submissions_inflight = set()
 
         self._timer = QTimer(mw)
         self._timer.timeout.connect(self._on_timer)
@@ -128,18 +187,167 @@ class MultiplayerController:
                 "level": int(getattr(self.main_pokemon, "level", 1) or 1),
             },
         )
-        # Local, display-only token progress; the server value wins on sync.
-        pvp = self.state.setdefault("pvp", {})
-        progress = pvp.get("token_progress", 0) + 1
-        if progress >= CARDS_PER_TOKEN:
-            progress = 0
-            pvp["tokens"] = min(pvp.get("tokens", 0) + 1, 3)
-            if self._has_active_match():
-                self._queue_toast("PvP turn token charged!")
-        pvp["token_progress"] = progress
+        self._start_pending_reviewer_battle()
 
         if self.outbox.pending_count() >= FLUSH_EVENT_THRESHOLD:
             self.flush_soon()
+
+    def on_reviewer_attack(self, enemy_pokemon):
+        """Attack the active PvP opponent with one of your Pokemon's moves.
+
+        One answered card is one attack, and the move is drawn at random
+        from the Pokemon's own moves - a battle is the reviewer's rhythm,
+        not a second thing to pick. The request is scheduled from the normal
+        card-answer hook, so the reviewer never waits for the network. The
+        enemy marker prevents an active match from spending cards while a
+        stale wild encounter is still on screen.
+        """
+        if not self.enabled:
+            return
+        match = self._match_for_reviewer_enemy(enemy_pokemon)
+        if match is None or match.get("your_move_committed"):
+            return
+        match_id = match.get("id")
+        if not match_id or match_id in self._turn_submissions_inflight:
+            return
+        self._sync_reviewer_enemy(match, enemy_pokemon)
+
+        # An empty move is valid: the server picks one for the round.
+        move = self.random_attack()
+
+        self._turn_submissions_inflight.add(match_id)
+        # The queued cards must reach the server first: it refuses a move
+        # from a player who has not answered one, so sending the move on its
+        # own would lose the first attack of every battle.
+        batch = self.outbox.peek_batch()
+        active_pokemon = self.active_pokemon_payload()
+
+        def task():
+            if batch:
+                self.api.post_events(batch, active_pokemon)
+            return self.api.submit_turn(match_id, move)
+
+        def on_done(future):
+            self._turn_submissions_inflight.discard(match_id)
+            try:
+                state = future.result()
+            except MultiplayerAuthError:
+                self._handle_auth_failure()
+                return
+            except Exception as exc:
+                self.logger.log("warning", f"Could not submit reviewer PvP turn: {exc}")
+                return
+            if batch:
+                self.outbox.ack(batch)
+            self._apply_state(state)
+            fresh_match = self._pvp_match_by_id(state, match_id)
+            if fresh_match is not None:
+                self._sync_reviewer_enemy(fresh_match, enemy_pokemon)
+                self._refresh_reviewer_pvp_battle()
+
+        mw.taskman.run_in_background(task, on_done)
+
+    def random_attack(self) -> str:
+        """One of the player's own moves, chosen at random.
+
+        Returns "" when the Pokemon has no usable moves, which asks the
+        server to pick the round's move instead of skipping the attack.
+        """
+        attacks = getattr(self.main_pokemon, "attacks", None) or []
+        moves = []
+        for attack in attacks:
+            if isinstance(attack, dict):
+                attack = attack.get("name") or attack.get("id") or ""
+            attack = str(attack or "").strip()
+            if attack:
+                moves.append(attack)
+        if not moves:
+            return ""
+        return random.choice(moves)
+
+    def is_reviewer_pvp_enemy(self, enemy_pokemon) -> bool:
+        match = self._match_for_reviewer_enemy(enemy_pokemon)
+        if match is None:
+            return False
+        self._sync_reviewer_enemy(match, enemy_pokemon)
+        return True
+
+    def _match_for_reviewer_enemy(self, enemy_pokemon) -> Optional[dict]:
+        match = self._active_pvp_match()
+        if match is None:
+            return None
+        opponent = match.get("opponent_pokemon") or {}
+        if not str(getattr(enemy_pokemon, "tier", "")).startswith("PvP:"):
+            return None
+        if int(getattr(enemy_pokemon, "id", 0) or 0) != int(opponent.get("id") or 0):
+            return None
+        return match
+
+    @staticmethod
+    def _sync_reviewer_enemy(match: dict, enemy_pokemon) -> None:
+        opponent = match.get("opponent_pokemon") or {}
+        hp = max(0, int(opponent.get("hp") or 0))
+        max_hp = max(1, int(opponent.get("max_hp") or hp or 1))
+        enemy_pokemon.hp = hp
+        enemy_pokemon.current_hp = hp
+        enemy_pokemon.max_hp = max_hp
+        enemy_pokemon.battle_status = "fainted" if hp <= 0 else "fighting"
+
+    @staticmethod
+    def _pvp_match_by_id(state: dict, match_id) -> Optional[dict]:
+        for match in (state.get("pvp") or {}).get("matches", []):
+            if match.get("id") == match_id:
+                return match
+        return None
+
+    @staticmethod
+    def _pvp_opponent_switched(
+        old_match: Optional[dict], new_match: Optional[dict]
+    ) -> bool:
+        if old_match is None or new_match is None:
+            return False
+
+        def opponent_id(match: dict) -> int:
+            try:
+                return int((match.get("opponent_pokemon") or {}).get("id") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        new_id = opponent_id(new_match)
+        return new_id > 0 and opponent_id(old_match) != new_id
+
+    @staticmethod
+    def _pvp_hp_changed(old_match: Optional[dict], new_match: Optional[dict]) -> bool:
+        if old_match is None or new_match is None:
+            return False
+
+        def hp_pair(match: dict):
+            opponent = match.get("opponent_pokemon") or {}
+            opponent_hp = opponent.get("hp")
+            if opponent_hp is None:
+                opponent_hp = match.get("opponent_hp")
+            return (opponent_hp, match.get("your_hp"), match.get("round"))
+
+        return hp_pair(old_match) != hp_pair(new_match)
+
+    def _refresh_reviewer_pvp_battle(self):
+        if self._refresh_reviewer_battle is None:
+            return
+        try:
+            self._refresh_reviewer_battle()
+        except Exception as exc:
+            self.logger.log("warning", f"Could not refresh reviewer PvP battle: {exc}")
+
+    def _start_pending_reviewer_battle(self):
+        if self._pending_reviewer_match_id is None or self._start_reviewer_battle is None:
+            return
+        try:
+            started = self._start_reviewer_battle()
+        except Exception as exc:
+            self.logger.log("warning", f"Could not open PvP encounter in reviewer: {exc}")
+            return
+        if started is not False:
+            self._pending_reviewer_match_id = None
 
     # --- Background sync -----------------------------------------------------
 
@@ -156,6 +364,32 @@ class MultiplayerController:
         if self._seconds_since_sync >= poll_after:
             self.refresh_state()
 
+    def active_pokemon_payload(self) -> Optional[dict]:
+        """The selected Pokemon to advertise to opponents, or None.
+
+        A friend challenging this player battles this Pokemon, so it is sent
+        with every event batch (it changes whenever the player switches) and
+        again when a battle is created or accepted.
+        """
+        pokemon = self.main_pokemon
+        if pokemon is None:
+            return None
+        try:
+            pokemon_id = int(getattr(pokemon, "id", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        if pokemon_id <= 0:
+            return None
+        try:
+            level = int(getattr(pokemon, "level", 0) or 0)
+        except (TypeError, ValueError):
+            level = 0
+        return {
+            "name": str(getattr(pokemon, "name", "") or "").capitalize(),
+            "id": pokemon_id,
+            "level": max(0, min(level, 100)),
+        }
+
     def flush_soon(self):
         """Send the next outbox batch in the background."""
         if self._flush_inflight or not self.enabled:
@@ -165,8 +399,10 @@ class MultiplayerController:
             return
         self._flush_inflight = True
 
+        active_pokemon = self.active_pokemon_payload()
+
         def task():
-            return self.api.post_events(batch)
+            return self.api.post_events(batch, active_pokemon)
 
         def on_done(future):
             self._flush_inflight = False
@@ -264,6 +500,7 @@ class MultiplayerController:
         if not isinstance(new_state, dict):
             return
         old_state = self.state
+        old_match = self._active_pvp_match(old_state)
         merged = dict(old_state)
         for key in (
             "raid",
@@ -276,9 +513,34 @@ class MultiplayerController:
         ):
             if key in new_state:
                 merged[key] = new_state[key]
+        new_match = self._active_pvp_match(merged)
+        old_match_id = old_match.get("id") if old_match is not None else None
+        new_match_id = new_match.get("id") if new_match is not None else None
+        # Rebuild the reviewer encounter when the battle itself changes: a
+        # new/finished match, or the friend switching their Pokemon mid
+        # battle (the on-screen enemy is matched by species id, so a stale
+        # one would stop taking our attacks).
+        restart_encounter = old_match_id != new_match_id or self._pvp_opponent_switched(
+            old_match, new_match
+        )
+        if restart_encounter:
+            # The same callback loads either the newly active opponent or,
+            # when a match ends, the next raid/wild encounter selected by
+            # the installed encounter wrapper.
+            self._pending_reviewer_match_id = new_match_id or old_match_id
         self._derive_toasts(old_state, merged)
         self._claim_raid_reward(merged.get("raid_reward"))
         self.state = merged
+        if restart_encounter:
+            # Swap the encounter as soon as the battle starts (or ends) so a
+            # wild Pokemon is never on screen during a friend battle. If the
+            # reviewer is closed the callback reports False and the swap is
+            # retried on the next reviewed card.
+            self._start_pending_reviewer_battle()
+        elif self._pvp_hp_changed(old_match, new_match):
+            # The opponent (or a bot) moved between our own turns; the
+            # reviewer HP bar is server-authoritative, so redraw it.
+            self._refresh_reviewer_pvp_battle()
         self._seconds_since_sync = 0
         self._save_state()
 
@@ -373,6 +635,15 @@ class MultiplayerController:
     def _has_active_match(self) -> bool:
         matches = (self.state.get("pvp") or {}).get("matches", [])
         return any(m.get("status") in ("active", "pending") for m in matches)
+
+    def _active_pvp_match(self, state: Optional[dict] = None) -> Optional[dict]:
+        pvp = (state if state is not None else self.state).get("pvp") or {}
+        for match in pvp.get("matches", []):
+            if match.get("status") == "active" and isinstance(
+                match.get("opponent_pokemon"), dict
+            ):
+                return match
+        return None
 
     # --- Reviewer-facing output --------------------------------------------------
 

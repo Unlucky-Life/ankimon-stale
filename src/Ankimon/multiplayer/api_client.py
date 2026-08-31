@@ -159,15 +159,20 @@ class MultiplayerApiClient:
 
     # --- Event ingest -----------------------------------------------------
 
-    def post_events(self, events: list) -> dict:
+    def post_events(self, events: list, active_pokemon: Optional[dict] = None) -> dict:
         """Send a batch of review events; the response embeds fresh state.
 
         Events carry stable UUIDs so the server can deduplicate retries.
+        `active_pokemon` rides along so friends battling this player see the
+        Pokemon currently selected here, not a server-side stand-in.
         """
+        payload = {"events": events}
+        if active_pokemon:
+            payload["active_pokemon"] = active_pokemon
         return self._request(
             "POST",
             "/events:batch",
-            payload={"events": events},
+            payload=payload,
             idempotency_key=str(uuid.uuid4()),
         )
 
@@ -231,14 +236,22 @@ class MultiplayerApiClient:
 
     # --- Friend battles ---------------------------------------------------
 
-    def challenge_friend(self, opponent_username: str) -> dict:
-        return self._request(
-            "POST", "/matches", payload={"opponent": opponent_username}
-        )
+    def challenge_friend(
+        self, opponent_username: str, active_pokemon: Optional[dict] = None
+    ) -> dict:
+        payload = {"opponent": opponent_username}
+        if active_pokemon:
+            payload["active_pokemon"] = active_pokemon
+        return self._request("POST", "/matches", payload=payload)
 
-    def respond_to_challenge(self, match_id: str, accept: bool) -> dict:
+    def respond_to_challenge(
+        self, match_id: str, accept: bool, active_pokemon: Optional[dict] = None
+    ) -> dict:
+        payload = {"accept": accept}
+        if active_pokemon:
+            payload["active_pokemon"] = active_pokemon
         return self._request(
-            "POST", f"/matches/{match_id}/respond", payload={"accept": accept}
+            "POST", f"/matches/{match_id}/respond", payload=payload
         )
 
     def submit_turn(self, match_id: str, move: str) -> dict:

@@ -1,10 +1,11 @@
-"""Raid boss encounter integration for Ankimon multiplayer.
+"""Multiplayer encounter integration for Ankimon.
 
-This module keeps the reviewer battle target aligned with multiplayer state:
-if the controller has a live raid cached, wild encounter rolls are replaced
-with that raid boss Pokemon. Otherwise, an active friend/bot battle can replace
-the wild encounter with the opponent's battle Pokemon. It does not perform
-network I/O; the controller refreshes state asynchronously elsewhere.
+This module keeps the reviewer battle target aligned with multiplayer state.
+An active friend/bot battle replaces the wild encounter with the opponent's
+currently selected Pokemon (as reported by their client); failing that, a
+live raid replaces it with the raid boss; otherwise the normal wild roll
+runs. It does not perform network I/O; the controller refreshes state
+asynchronously elsewhere.
 """
 
 import random
@@ -48,7 +49,10 @@ def _active_pvp_match_from_controller(controller: Any) -> Optional[dict]:
             continue
         if int(opponent.get("id") or 0) <= 0:
             continue
-        if int(opponent.get("hp") or 1) <= 0:
+        # `or 1` would swallow an explicit 0 here: a fainted opponent must
+        # release the encounter slot, an absent HP field must not.
+        hp = opponent.get("hp")
+        if hp is not None and int(hp) <= 0:
             continue
         return match
     return None
@@ -177,23 +181,11 @@ def install_raid_boss_encounter_patch(controller: Any, caller_globals: dict) -> 
         return
 
     def generate_multiplayer_or_random(main_pokemon_level, ankimon_tracker_obj):
-        raid = _active_raid_from_controller(controller)
-        if raid is not None:
-            try:
-                raid_boss = _build_raid_boss_tuple(
-                    raid,
-                    main_pokemon_level,
-                    ankimon_tracker_obj,
-                )
-                if raid_boss is not None:
-                    logger = getattr(controller, "logger", None)
-                    if logger is not None:
-                        logger.log("game", f"Loaded raid boss encounter: {raid_boss[0]}")
-                    return raid_boss
-            except Exception as exc:
-                logger = getattr(controller, "logger", None)
-                if logger is not None:
-                    logger.log("warning", f"Could not load raid boss encounter: {exc}")
+        logger = getattr(controller, "logger", None)
+
+        # A friend/bot battle outranks a raid boss, which outranks a wild
+        # encounter: while a battle is running the reviewer must show the
+        # opponent's Pokemon, never a wild roll.
         match = _active_pvp_match_from_controller(controller)
         if match is not None:
             try:
@@ -203,14 +195,29 @@ def install_raid_boss_encounter_patch(controller: Any, caller_globals: dict) -> 
                     ankimon_tracker_obj,
                 )
                 if pvp_opponent is not None:
-                    logger = getattr(controller, "logger", None)
                     if logger is not None:
                         logger.log("game", f"Loaded PvP encounter: {pvp_opponent[0]}")
                     return pvp_opponent
             except Exception as exc:
-                logger = getattr(controller, "logger", None)
                 if logger is not None:
                     logger.log("warning", f"Could not load PvP encounter: {exc}")
+
+        raid = _active_raid_from_controller(controller)
+        if raid is not None:
+            try:
+                raid_boss = _build_raid_boss_tuple(
+                    raid,
+                    main_pokemon_level,
+                    ankimon_tracker_obj,
+                )
+                if raid_boss is not None:
+                    if logger is not None:
+                        logger.log("game", f"Loaded raid boss encounter: {raid_boss[0]}")
+                    return raid_boss
+            except Exception as exc:
+                if logger is not None:
+                    logger.log("warning", f"Could not load raid boss encounter: {exc}")
+
         return original(main_pokemon_level, ankimon_tracker_obj)
 
     generate_multiplayer_or_random._ankimon_raid_boss_patch = True

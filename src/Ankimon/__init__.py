@@ -167,7 +167,44 @@ mw.settings_obj = settings_obj
 
 from . import multiplayer as ankimon_multiplayer
 
-ankimon_multiplayer.init_multiplayer(settings_obj, logger, main_pokemon)
+
+def _start_multiplayer_reviewer_battle():
+    """Replace the current wild encounter when a friend battle starts."""
+    if getattr(mw, "reviewer", None) is None:
+        return False
+    global new_state, mutator_full_reset
+    new_state = None
+    mutator_full_reset = 1
+    new_pokemon(enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj)
+    return True
+
+
+def _refresh_multiplayer_reviewer_battle():
+    if getattr(mw, "reviewer", None) is None:
+        return False
+
+    # Friend/bot HP is server-authoritative: pull the latest value onto the
+    # on-screen enemy before redrawing, exactly like a raid boss bar.
+    ankimon_multiplayer.sync_reviewer_enemy(enemy_pokemon)
+
+    class Container(object):
+        pass
+
+    reviewer = Container()
+    reviewer.web = mw.reviewer.web
+    reviewer_obj.update_life_bar(reviewer, 0, 0)
+    if test_window is not None:
+        test_window.display_battle()
+    return True
+
+
+ankimon_multiplayer.init_multiplayer(
+    settings_obj,
+    logger,
+    main_pokemon,
+    start_reviewer_battle=_start_multiplayer_reviewer_battle,
+    refresh_reviewer_battle=_refresh_multiplayer_reviewer_battle,
+)
 
 from .gui_classes import overview_team
 
@@ -502,6 +539,17 @@ def on_review_card(*args):
         reviewer_obj.seconds = 0
         reviewer_obj.myseconds = 0
         ankimon_tracker_obj.general_card_count_for_battle += 1
+
+        # PvP uses the same reviewer surface and card-answer rhythm, but its
+        # HP is server-authoritative. Do not also run the wild-battle engine
+        # locally: that would deal a second, divergent copy of the damage and
+        # could incorrectly award/catch a friend's Pokemon on faint. The move
+        # is drawn at random inside the controller, not taken from the wild
+        # battle's own pick.
+        if ankimon_multiplayer.is_reviewer_pvp_enemy(enemy_pokemon):
+            ankimon_multiplayer.notify_reviewer_attack(enemy_pokemon)
+            _refresh_multiplayer_reviewer_battle()
+            return
 
         color = "#F0B27A"  # Initialize with a default color
 

@@ -64,6 +64,11 @@ DEFAULT_CONFIG = {
     "misc.developer_mode": False,
     "multiplayer.enabled": False,
     "multiplayer.api_url": "https://multiplayer-api.ankimon.com",
+    # Base64 QDialog geometry for the multiplayer window. Empty means
+    # "open at a size derived from the screen"; it is always re-clamped to
+    # the current screen on restore, so a stale value cannot strand the
+    # window off-display.
+    "multiplayer.window_geometry": "",
     "trainer.name": "Ash",
     "trainer.sprite": "ash",
     "trainer.id": 0,

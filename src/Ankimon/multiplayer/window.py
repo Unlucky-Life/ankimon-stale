@@ -2,16 +2,18 @@
 
 Opened from the Ankimon menu. All server calls go through
 MultiplayerController.run_action (background thread + main-thread callback),
-so the dialog never freezes the UI. This is also where PvP moves are
-committed, deliberately outside the reviewer.
+so the dialog never freezes the UI. Friend-battle attacks happen in the
+reviewer, one per answered card, with a randomly chosen move - there is
+nothing to pick here.
 """
 
 from typing import Optional
 
 from aqt.utils import showInfo, tooltip
+from PyQt6.QtCore import QByteArray, QSize
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -21,9 +23,11 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from . import get_controller
@@ -43,9 +47,29 @@ def open_multiplayer_window():
         _window = MultiplayerWindow(controller)
     _window.refresh_from_state()
     _window.check_server_health()
+    # Re-check the fit on every open: the window is a long-lived singleton,
+    # and the screen it opens onto can change between two openings (an
+    # external monitor unplugged, a resolution or scaling change).
+    _window.fit_to_screen()
     _window.show()
     _window.raise_()
     _window.activateWindow()
+
+
+# Preferred size when nothing has been remembered yet. Treated as a wish,
+# not a demand: PREFERRED_SIZE is clamped to whatever the screen actually
+# offers, so a 700px-tall window never opens taller than a short screen.
+PREFERRED_SIZE = QSize(600, 700)
+
+# The floor the dialog can be dragged down to. Everything above it scrolls,
+# so this is about what stays usable, not about what fits.
+MINIMUM_SIZE = QSize(420, 320)
+
+# Kept clear of the screen edges so the title bar and the resize corner are
+# always grabbable, whatever the taskbar is doing.
+SCREEN_MARGIN = 80
+
+GEOMETRY_SETTING = "multiplayer.window_geometry"
 
 
 class MultiplayerWindow(QDialog):
@@ -53,9 +77,18 @@ class MultiplayerWindow(QDialog):
         super().__init__()
         self.controller = controller
         self.setWindowTitle("Ankimon Multiplayer")
-        self.resize(600, 700)
 
-        layout = QVBoxLayout(self)
+        # A grip in the corner: on some Linux window managers a QDialog is
+        # otherwise awkward to grab by its edges.
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(MINIMUM_SIZE)
+
+        # The three tabs and their group boxes have a tall combined minimum.
+        # Putting the whole body in a scroll area means that minimum stops
+        # being the dialog's minimum, which is what actually lets the window
+        # be dragged smaller instead of springing back.
+        body = QWidget()
+        layout = QVBoxLayout(body)
         layout.addWidget(self._build_connection_group())
         layout.addWidget(self._build_demo_group())
 
@@ -68,6 +101,91 @@ class MultiplayerWindow(QDialog):
         refresh_button = QPushButton("Refresh")
         refresh_button.clicked.connect(self.refresh_from_server)
         layout.addWidget(refresh_button)
+
+        scroll = QScrollArea()
+        scroll.setWidget(body)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        self._restore_geometry()
+
+    # --- Sizing -----------------------------------------------------------
+
+    def _available_size(self) -> QSize:
+        """The usable area of the screen this window will appear on."""
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return PREFERRED_SIZE
+        area = screen.availableGeometry()
+        return QSize(
+            max(MINIMUM_SIZE.width(), area.width() - SCREEN_MARGIN),
+            max(MINIMUM_SIZE.height(), area.height() - SCREEN_MARGIN),
+        )
+
+    def _restore_geometry(self) -> None:
+        """Reopen at the remembered size, or at a size the screen can hold.
+
+        The remembered geometry is still clamped: it may have been saved on
+        a larger monitor, or on a laptop that has since been undocked, and
+        restoring it verbatim would put the window back off-screen — the
+        one state a user cannot drag their way out of.
+        """
+        available = self._available_size()
+        stored = self.controller.settings.get(GEOMETRY_SETTING, "")
+        if stored:
+            try:
+                self.restoreGeometry(QByteArray.fromBase64(stored.encode("ascii")))
+            except (ValueError, TypeError):
+                pass
+
+        size = self.size() if stored else PREFERRED_SIZE
+        self.resize(
+            min(size.width(), available.width()),
+            min(size.height(), available.height()),
+        )
+        self._move_onto_screen()
+
+    def _move_onto_screen(self) -> None:
+        """Nudge the window fully inside its screen's usable area."""
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        frame = self.frameGeometry()
+        x = min(max(frame.x(), area.left()), max(area.left(), area.right() - frame.width()))
+        y = min(max(frame.y(), area.top()), max(area.top(), area.bottom() - frame.height()))
+        self.move(x, y)
+
+    def fit_to_screen(self) -> None:
+        """Shrink the window to the current screen and pull it into view."""
+        available = self._available_size()
+        self.resize(
+            min(self.width(), available.width()),
+            min(self.height(), available.height()),
+        )
+        self._move_onto_screen()
+
+    def _save_geometry(self) -> None:
+        try:
+            encoded = bytes(self.saveGeometry().toBase64()).decode("ascii")
+            self.controller.settings.set(GEOMETRY_SETTING, encoded)
+        except Exception:
+            # Remembering the window size is a convenience; never let it
+            # stop the window from closing.
+            pass
+
+    def closeEvent(self, event):
+        self._save_geometry()
+        super().closeEvent(event)
+
+    def reject(self):
+        # Escape closes a QDialog through reject(), not closeEvent().
+        self._save_geometry()
+        super().reject()
 
     # --- Connection -------------------------------------------------------
 
@@ -199,7 +317,9 @@ class MultiplayerWindow(QDialog):
     def _on_challenge_test_bot(self):
         self._run(
             "Challenging test bot...",
-            lambda: self.controller.api.challenge_friend("bot:ankimon-test"),
+            lambda: self.controller.api.challenge_friend(
+                "bot:ankimon-test", self.controller.active_pokemon_payload()
+            ),
         )
 
     # --- Raid tab ---------------------------------------------------------
@@ -486,24 +606,21 @@ class MultiplayerWindow(QDialog):
         friend_row.addLayout(friend_buttons)
         layout.addLayout(friend_row)
 
-        self.tokens_label = QLabel("Turn tokens: 0 / 3")
-        layout.addWidget(self.tokens_label)
+        self.attack_label = QLabel("Answer a card in the reviewer to attack.")
+        layout.addWidget(self.attack_label)
 
         layout.addWidget(QLabel("Your battles:"))
         self.match_list = QListWidget()
         self.match_list.currentRowChanged.connect(lambda _row: self._update_turn_controls())
         layout.addWidget(self.match_list)
 
-        turn_row = QHBoxLayout()
-        turn_row.addWidget(QLabel("Move:"))
-        self.move_combo = QComboBox()
-        attacks = getattr(self.controller.main_pokemon, "attacks", None) or []
-        self.move_combo.addItems([str(attack) for attack in attacks])
-        turn_row.addWidget(self.move_combo, stretch=1)
-        self.commit_button = QPushButton("Commit turn")
-        self.commit_button.clicked.connect(self._on_commit_turn)
-        turn_row.addWidget(self.commit_button)
-        layout.addLayout(turn_row)
+        reviewer_hint = QLabel(
+            "Active battles are fought in the reviewer: every card you answer "
+            "is one attack, using a move picked at random from your Pokemon's."
+        )
+        reviewer_hint.setWordWrap(True)
+        reviewer_hint.setStyleSheet("color: #5D6D7E; font-style: italic;")
+        layout.addWidget(reviewer_hint)
 
         respond_row = QHBoxLayout()
         self.accept_button = QPushButton("Accept challenge")
@@ -549,7 +666,9 @@ class MultiplayerWindow(QDialog):
             return
         self._run(
             f"Challenging {friend.get('username', opponent)}...",
-            lambda: self.controller.api.challenge_friend(opponent),
+            lambda: self.controller.api.challenge_friend(
+                opponent, self.controller.active_pokemon_payload()
+            ),
         )
 
     def _on_challenge(self):
@@ -562,7 +681,9 @@ class MultiplayerWindow(QDialog):
             return
         self._run(
             f"Challenging {opponent}...",
-            lambda: self.controller.api.challenge_friend(opponent),
+            lambda: self.controller.api.challenge_friend(
+                opponent, self.controller.active_pokemon_payload()
+            ),
         )
 
     def _on_respond(self, accept: bool):
@@ -572,28 +693,9 @@ class MultiplayerWindow(QDialog):
             return
         self._run(
             "Sending response...",
-            lambda: self.controller.api.respond_to_challenge(match["id"], accept),
-        )
-
-    def _on_commit_turn(self):
-        match = self._selected_match()
-        if not match or match.get("status") != "active":
-            tooltip("Select an active battle first.")
-            return
-        if match.get("your_move_committed"):
-            tooltip("You already committed a move this round.")
-            return
-        tokens = (self.controller.state.get("pvp") or {}).get("tokens", 0)
-        if tokens < 1:
-            tooltip("No turn tokens - answer more cards to charge one!")
-            return
-        move = self.move_combo.currentText()
-        if not move:
-            tooltip("Your Pokemon has no moves to use.")
-            return
-        self._run(
-            f"Committing {move}...",
-            lambda: self.controller.api.submit_turn(match["id"], move),
+            lambda: self.controller.api.respond_to_challenge(
+                match["id"], accept, self.controller.active_pokemon_payload()
+            ),
         )
 
     # --- Shared plumbing --------------------------------------------------
@@ -695,7 +797,11 @@ class MultiplayerWindow(QDialog):
             self.raid_room_list.addItem(item)
 
         pvp = state.get("pvp") or {}
-        self.tokens_label.setText(f"Turn tokens: {pvp.get('tokens', 0)} / 3")
+        self.attack_label.setText(
+            "Attack ready — answer a card in the reviewer."
+            if pvp.get("attack_ready")
+            else "Answer a card in the reviewer to attack."
+        )
 
         self.friend_list.clear()
         for friend in state.get("friends", []):
@@ -745,14 +851,8 @@ class MultiplayerWindow(QDialog):
     def _update_turn_controls(self):
         match = self._selected_match()
         is_incoming = bool(match and match.get("incoming_challenge"))
-        can_commit = bool(
-            match
-            and match.get("status") == "active"
-            and not match.get("your_move_committed")
-        )
         self.accept_button.setEnabled(is_incoming)
         self.decline_button.setEnabled(is_incoming)
-        self.commit_button.setEnabled(can_commit)
 
     def _update_pvp_gate_controls(self):
         human_enabled = self._human_pvp_enabled()
