@@ -1133,7 +1133,12 @@ def api_client_module(tmp_dir):
         credentials_path = os.path.join(tmp_dir, "credentials.json")
         with open(credentials_path, "w", encoding="utf-8") as f:
             json.dump({"username": "ash", "api_key": "key"}, f)
-        resources = types.ModuleType("Ankimon.resources")
+        # Load the real resources module (it is stdlib-only at import time)
+        # and point it at the scratch file, so the credential parsing under
+        # test is the shipped one rather than a stub.
+        resources = _load_from_path(
+            "Ankimon.resources", os.path.join(ANKIMON, "resources.py")
+        )
         resources.user_path_credentials = credentials_path
         sys.modules["Ankimon.resources"] = resources
 
@@ -1175,3 +1180,31 @@ def test_409_carries_the_server_message(api_client_module):
     with pytest.raises(api_client_module.MultiplayerConflictError) as excinfo:
         client.join_raid("ABC234")
     assert "already started" in str(excinfo.value)
+
+
+def test_load_credentials_reads_the_current_dict_format(api_client_module):
+    assert api_client_module.load_credentials() == {
+        "username": "ash",
+        "api_key": "key",
+    }
+
+
+def test_load_credentials_reads_the_legacy_list_format(api_client_module):
+    # Ankimon used to write the leaderboard credentials as a list of
+    # single-key dicts; collections that have not re-entered their details
+    # since still carry that shape and must not crash on open.
+    path = api_client_module.user_path_credentials
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump([{"username": "misty"}, {"api_key": "legacy"}], f)
+    assert api_client_module.load_credentials() == {
+        "username": "misty",
+        "api_key": "legacy",
+    }
+
+
+def test_load_credentials_is_none_for_an_unusable_file(api_client_module):
+    path = api_client_module.user_path_credentials
+    for content in ("\"just-a-string\"", "[]", "[{\"username\": \"ash\"}]"):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        assert api_client_module.load_credentials() is None

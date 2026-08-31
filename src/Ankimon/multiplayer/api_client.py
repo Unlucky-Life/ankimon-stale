@@ -12,7 +12,7 @@ from typing import Optional
 
 import requests
 
-from ..resources import user_path_credentials
+from ..resources import user_path_credentials, normalise_credentials
 
 DEFAULT_API_URL = "https://multiplayer-api.ankimon.com"
 API_VERSION = "v1"
@@ -53,8 +53,11 @@ def load_credentials() -> Optional[dict]:
     """
     try:
         with open(user_path_credentials, "r", encoding="utf-8") as f:
-            credentials = json.load(f)
+            raw = json.load(f)
     except (OSError, json.JSONDecodeError):
+        return None
+    credentials = normalise_credentials(raw)
+    if not credentials:
         return None
     if credentials.get("username") and credentials.get("api_key"):
         return credentials
