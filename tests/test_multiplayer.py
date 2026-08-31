@@ -167,7 +167,8 @@ def multiplayer_module(tmp_dir):
                 return list(self._events)
 
             def ack(self, events):
-                pass
+                acked = list(events)
+                self._events = [e for e in self._events if e not in acked]
 
         outbox_stub.Outbox = Outbox
 
@@ -369,22 +370,20 @@ def test_sync_reviewer_enemy_copies_server_hp(multiplayer_module):
     assert wild.hp == 100
 
 
-def test_again_does_not_charge_local_turn_progress(multiplayer_module):
+def test_reviewed_card_is_queued_for_the_server(multiplayer_module):
     controller = _make_controller(multiplayer_module)
-    controller.state = {"pvp": {"tokens": 0, "token_progress": 9, "matches": []}}
+    controller.state = {"pvp": {"matches": []}}
 
-    controller.on_card_reviewed("again", 3)
+    controller.on_card_reviewed("good", 3)
 
-    assert controller.state["pvp"]["token_progress"] == 9
-    assert controller.state["pvp"]["tokens"] == 0
+    # The card itself is what pays for an attack, so it has to reach the
+    # server; nothing is tallied locally any more.
+    assert controller.outbox.pending_count() == 1
 
 
 def test_reviewer_attack_submits_active_opponent_move(multiplayer_module):
     controller = _make_controller(multiplayer_module)
-    controller.state = {
-        "pvp": {"tokens": 1, "token_progress": 0, "matches": [_active_match()]}
-    }
-    controller._confirmed_pvp_tokens = 1
+    controller.state = {"pvp": {"matches": [_active_match()]}}
     submitted = []
     completed_match = _active_match(
         status="finished",
@@ -396,9 +395,7 @@ def test_reviewer_attack_submits_active_opponent_move(multiplayer_module):
             "max_hp": 100,
         },
     )
-    completed_state = {
-        "pvp": {"tokens": 0, "token_progress": 0, "matches": [completed_match]}
-    }
+    completed_state = {"pvp": {"matches": [completed_match]}}
     controller.api.submit_turn = (
         lambda match_id, move: submitted.append((match_id, move)) or completed_state
     )
@@ -426,9 +423,7 @@ def test_reviewer_attack_submits_active_opponent_move(multiplayer_module):
 
 def test_reviewer_attack_ignores_wild_encounter(multiplayer_module):
     controller = _make_controller(multiplayer_module)
-    controller.state = {
-        "pvp": {"tokens": 1, "token_progress": 0, "matches": [_active_match()]}
-    }
+    controller.state = {"pvp": {"matches": [_active_match()]}}
     submitted = []
     controller.api.submit_turn = lambda match_id, move: submitted.append((match_id, move))
     enemy = types.SimpleNamespace(id=25, tier="Normal")
@@ -438,24 +433,64 @@ def test_reviewer_attack_ignores_wild_encounter(multiplayer_module):
     assert submitted == []
 
 
-def test_reviewer_attack_waits_for_server_confirmed_token(multiplayer_module):
+def test_reviewer_attack_sends_the_answered_card_first(multiplayer_module):
+    """The server refuses a move from a player who has not answered a card."""
     controller = _make_controller(multiplayer_module)
-    controller.state = {
-        "pvp": {"tokens": 1, "token_progress": 0, "matches": [_active_match()]}
-    }
-    # The displayed balance can be optimistic while review events are still
-    # queued; only _apply_state advances this confirmed server balance.
-    controller._confirmed_pvp_tokens = 0
-    submitted = []
-    controller.api.submit_turn = lambda match_id, move: submitted.append((match_id, move))
+    controller.state = {"pvp": {"matches": [_active_match()]}}
+    calls = []
+    controller.api.post_events = (
+        lambda events, active_pokemon=None: calls.append(("events", len(events)))
+    )
+    controller.api.submit_turn = (
+        lambda match_id, move: calls.append(("turn", move))
+        or {"pvp": {"matches": [_active_match(your_move_committed=True)]}}
+    )
+
+    def run_immediately(task, on_done):
+        on_done(ImmediateFuture(task()))
+
+    multiplayer_module.mw.taskman.run_in_background = run_immediately
     enemy = types.SimpleNamespace(
         id=25, tier="PvP: gary", hp=100, current_hp=100, max_hp=100,
         battle_status="fighting",
     )
 
+    controller.on_card_reviewed("good", 3)
     controller.on_reviewer_attack("thunderbolt", enemy)
 
-    assert submitted == []
+    assert calls == [("events", 1), ("turn", "thunderbolt")]
+    # The batch is acknowledged only after the whole chain succeeded.
+    assert controller.outbox.pending_count() == 0
+
+
+def test_reviewer_attack_keeps_the_card_queued_when_it_fails(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.state = {"pvp": {"matches": [_active_match()]}}
+
+    def boom(match_id, move):
+        raise RuntimeError("offline")
+
+    controller.api.post_events = lambda events, active_pokemon=None: {}
+    controller.api.submit_turn = boom
+
+    def run_immediately(task, on_done):
+        class FailedFuture:
+            def result(self):
+                return task()
+
+        on_done(FailedFuture())
+
+    multiplayer_module.mw.taskman.run_in_background = run_immediately
+    enemy = types.SimpleNamespace(
+        id=25, tier="PvP: gary", hp=100, current_hp=100, max_hp=100,
+        battle_status="fighting",
+    )
+
+    controller.on_card_reviewed("good", 3)
+    controller.on_reviewer_attack("thunderbolt", enemy)
+
+    assert controller.outbox.pending_count() == 1
+    assert controller._turn_submissions_inflight == set()
 
 
 def test_apply_state_merges_friends_and_raid_rooms(multiplayer_module):
@@ -623,7 +658,7 @@ def test_hud_fragment_with_active_raid(hud_module):
 def test_hud_tells_player_when_reviewer_attack_is_ready(hud_module):
     state = {
         "pvp": {
-            "tokens": 1,
+            "attack_ready": True,
             "matches": [
                 {
                     "status": "active",
@@ -653,7 +688,7 @@ def _battle_state(**match_overrides):
         },
     }
     match.update(match_overrides)
-    return {"pvp": {"tokens": 1, "matches": [match]}}
+    return {"pvp": {"attack_ready": True, "matches": [match]}}
 
 
 def test_hud_shows_friend_battle_like_a_raid_boss(hud_module):
@@ -680,13 +715,14 @@ def test_hud_battle_panel_waits_for_the_opponent(hud_module):
     assert "ATTACK READY" not in html
 
 
-def test_hud_battle_panel_asks_for_cards_without_tokens(hud_module):
+def test_hud_battle_panel_points_at_the_next_card(hud_module):
     state = _battle_state()
-    state["pvp"]["tokens"] = 0
+    state["pvp"]["attack_ready"] = False
 
     html, _css = hud_module.build_hud_fragment(state)
 
-    assert "ANSWER CARDS TO CHARGE" in html
+    # No turn currency: the next answered card is the next attack.
+    assert "ANSWER A CARD TO ATTACK" in html
 
 
 def test_hud_shows_raid_and_battle_together(hud_module):

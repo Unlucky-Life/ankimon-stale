@@ -605,8 +605,8 @@ class MultiplayerWindow(QDialog):
         friend_row.addLayout(friend_buttons)
         layout.addLayout(friend_row)
 
-        self.tokens_label = QLabel("Turn tokens: 0 / 3")
-        layout.addWidget(self.tokens_label)
+        self.attack_label = QLabel("Answer a card in the reviewer to attack.")
+        layout.addWidget(self.attack_label)
 
         layout.addWidget(QLabel("Your battles:"))
         self.match_list = QListWidget()
@@ -614,8 +614,8 @@ class MultiplayerWindow(QDialog):
         layout.addWidget(self.match_list)
 
         reviewer_hint = QLabel(
-            "Active battles continue in the reviewer. Answer cards to attack; "
-            "a charged turn is submitted automatically using that attack."
+            "Active battles are fought in the reviewer: every card you answer "
+            "is one attack, sent automatically with the move your Pokemon used."
         )
         reviewer_hint.setWordWrap(True)
         reviewer_hint.setStyleSheet("color: #5D6D7E; font-style: italic;")
@@ -796,7 +796,11 @@ class MultiplayerWindow(QDialog):
             self.raid_room_list.addItem(item)
 
         pvp = state.get("pvp") or {}
-        self.tokens_label.setText(f"Turn tokens: {pvp.get('tokens', 0)} / 3")
+        self.attack_label.setText(
+            "Attack ready — answer a card in the reviewer."
+            if pvp.get("attack_ready")
+            else "Answer a card in the reviewer to attack."
+        )
 
         self.friend_list.clear()
         for friend in state.get("friends", []):

@@ -39,8 +39,6 @@ FLUSH_EVENT_THRESHOLD = 20
 ACTIVE_POLL_SECONDS = 30
 IDLE_POLL_SECONDS = 300
 
-CARDS_PER_TOKEN = 10
-
 BOSS_TOAST_THRESHOLDS = (75, 50, 25)
 
 _controller = None
@@ -154,9 +152,6 @@ class MultiplayerController:
         self._seconds_since_sync = 0
         self._pending_reviewer_match_id = None
         self._turn_submissions_inflight = set()
-        self._confirmed_pvp_tokens = int(
-            (self.state.get("pvp") or {}).get("tokens", 0) or 0
-        )
 
         self._timer = QTimer(mw)
         self._timer.timeout.connect(self._on_timer)
@@ -191,19 +186,6 @@ class MultiplayerController:
                 "level": int(getattr(self.main_pokemon, "level", 1) or 1),
             },
         )
-        # Local, display-only token progress; the server value wins on sync.
-        # The server only counts graded cards, so Again must not make the
-        # reviewer try to spend a token that does not exist remotely.
-        if grade != "again":
-            pvp = self.state.setdefault("pvp", {})
-            progress = pvp.get("token_progress", 0) + 1
-            if progress >= CARDS_PER_TOKEN:
-                progress = 0
-                pvp["tokens"] = min(pvp.get("tokens", 0) + 1, 3)
-                if self._has_active_match():
-                    self._queue_toast("PvP turn charged — attack in the reviewer!")
-            pvp["token_progress"] = progress
-
         self._start_pending_reviewer_battle()
 
         if self.outbox.pending_count() >= FLUSH_EVENT_THRESHOLD:
@@ -212,9 +194,10 @@ class MultiplayerController:
     def on_reviewer_attack(self, move, enemy_pokemon):
         """Commit the move that the regular reviewer battle just used.
 
-        This deliberately schedules the request from the normal card-answer
-        hook; the reviewer never waits for the network. The enemy marker
-        prevents an active match from consuming turns while a stale wild
+        One answered card is one attack: the card that was just graded pays
+        for this move. The request is scheduled from the normal card-answer
+        hook, so the reviewer never waits for the network. The enemy marker
+        prevents an active match from spending cards while a stale wild
         encounter is still on screen.
         """
         if not self.enabled:
@@ -226,11 +209,6 @@ class MultiplayerController:
         if not match_id or match_id in self._turn_submissions_inflight:
             return
         self._sync_reviewer_enemy(match, enemy_pokemon)
-        # Local token progress is optimistic until the queued card batch has
-        # reached the API. Spending only the last server-confirmed balance
-        # avoids a guaranteed 409 on the card that visually charges a token.
-        if self._confirmed_pvp_tokens < 1:
-            return
 
         if isinstance(move, dict):
             move = move.get("name") or move.get("id") or ""
@@ -239,8 +217,15 @@ class MultiplayerController:
             return
 
         self._turn_submissions_inflight.add(match_id)
+        # The queued cards must reach the server first: it refuses a move
+        # from a player who has not answered one, so sending the move on its
+        # own would lose the first attack of every battle.
+        batch = self.outbox.peek_batch()
+        active_pokemon = self.active_pokemon_payload()
 
         def task():
+            if batch:
+                self.api.post_events(batch, active_pokemon)
             return self.api.submit_turn(match_id, move)
 
         def on_done(future):
@@ -253,6 +238,8 @@ class MultiplayerController:
             except Exception as exc:
                 self.logger.log("warning", f"Could not submit reviewer PvP turn: {exc}")
                 return
+            if batch:
+                self.outbox.ack(batch)
             self._apply_state(state)
             fresh_match = self._pvp_match_by_id(state, match_id)
             if fresh_match is not None:
@@ -537,10 +524,6 @@ class MultiplayerController:
             # The opponent (or a bot) moved between our own turns; the
             # reviewer HP bar is server-authoritative, so redraw it.
             self._refresh_reviewer_pvp_battle()
-        if "pvp" in new_state:
-            self._confirmed_pvp_tokens = int(
-                (merged.get("pvp") or {}).get("tokens", 0) or 0
-            )
         self._seconds_since_sync = 0
         self._save_state()
 

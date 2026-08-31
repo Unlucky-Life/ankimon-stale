@@ -14,7 +14,6 @@ from typing import Optional, Tuple
 from ..business import get_image_as_base64
 from ..functions.sprite_functions import get_sprite_path
 
-MAX_TOKENS = 3
 
 
 def _escape(text) -> str:
@@ -92,20 +91,19 @@ def _active_raid(state: dict) -> dict:
 
 
 def _battle_footer(pvp: dict, match: dict) -> str:
-    tokens = min(int(pvp.get("tokens", 0) or 0), MAX_TOKENS)
-    pips = "".join(
-        f'<span class="ankimon-mp-pip{" filled" if i < tokens else ""}"></span>'
-        for i in range(MAX_TOKENS)
-    )
+    """Turn state under the HP bar.
 
+    A battle is fought card by card, so there is no turn currency to show:
+    the next answered card is the next attack.
+    """
     if match.get("your_move_committed"):
         status = '<span class="ankimon-mp-status waiting">WAITING FOR OPPONENT</span>'
-    elif tokens > 0:
+    elif pvp.get("attack_ready"):
         status = '<span class="ankimon-mp-status ready">ATTACK READY</span>'
     else:
-        status = '<span class="ankimon-mp-status">ANSWER CARDS TO CHARGE</span>'
+        status = '<span class="ankimon-mp-status ready">ANSWER A CARD TO ATTACK</span>'
 
-    return f'<div class="ankimon-mp-footer">{pips}{status}</div>'
+    return f'<div class="ankimon-mp-footer">{status}</div>'
 
 
 def _battle_panel(pvp: dict, match: dict) -> str:
@@ -204,13 +202,8 @@ def build_hud_fragment(state: dict) -> Optional[Tuple[str, str]]:
     #ankimon-hud .ankimon-mp-footer {
         display: flex; align-items: center; gap: 3px; margin-top: 3px;
     }
-    #ankimon-hud .ankimon-mp-pip {
-        width: 7px; height: 7px; border-radius: 50%;
-        background: rgba(255,255,255,0.25); display: inline-block;
-    }
-    #ankimon-hud .ankimon-mp-pip.filled { background: #F7DC6F; }
     #ankimon-hud .ankimon-mp-status {
-        margin-left: 4px; font-size: 10px; color: rgba(255,255,255,0.65);
+        font-size: 10px; color: rgba(255,255,255,0.65);
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     #ankimon-hud .ankimon-mp-status.ready { color: #7FB3D5; font-weight: bold; }
