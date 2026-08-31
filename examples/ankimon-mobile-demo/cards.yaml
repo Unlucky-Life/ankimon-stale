@@ -1,0 +1,125 @@
+- type: Basic
+  tags: [ankimon, mobile-demo, grass-type]
+  fields:
+    Front: |
+      <div class="ankimon-card" style="font-family:Arial,sans-serif;background:#17202a;color:#fff;border-radius:12px;padding:12px;text-align:center;max-width:520px;margin:auto;">
+        <div style="display:none"><img src="grass_pkmnbattlescene.png" /><img src="bulbasaur.png" /></div>
+        <img src="grass_pkmnbattlescene.png" style="width:100%;height:160px;object-fit:cover;border-radius:8px;" />
+        <div class="battle-top" style="display:flex;justify-content:space-between;font-weight:bold;margin:8px 4px;"><span>WILD BULBASAUR</span><span>HP 100</span></div>
+        <img src="bulbasaur.png" style="width:140px;height:140px;image-rendering:pixelated;display:block;margin:-4px auto 4px;" />
+        <div class="prompt" style="font-size:20px;font-weight:bold;margin:10px;">What type is Bulbasaur?</div>
+        <button class="attack" style="background:#e74c3c;color:#fff;border:0;border-radius:8px;padding:12px 18px;font-weight:bold;font-size:15px;" onclick="ankimonAttack(10)">ATTACK · 10 DMG</button>
+        <div class="score" id="ankimon-score"></div>
+        <script>
+          (function () {
+            var score = Number(localStorage.getItem('ankimon-mobile-demo-score') || 0);
+            var target = document.getElementById('ankimon-score');
+            if (target) target.textContent = 'SCORE: ' + score;
+            window.ankimonAttack = function (damage) {
+              score += Number(damage || 0);
+              localStorage.setItem('ankimon-mobile-demo-score', score);
+              if (target) target.textContent = 'SCORE: ' + score + ' · HIT!';
+            };
+          }());
+        </script>
+      </div>
+    Back: |
+      <div class="ankimon-card answer" style="font-family:Arial,sans-serif;background:#17202a;color:#fff;border-radius:12px;padding:12px;text-align:center;max-width:520px;margin:auto;">
+        <div style="display:none"><img src="grass_pkmnbattlescene.png" /><img src="bulbasaur.png" /></div>
+        <img src="grass_pkmnbattlescene.png" style="width:100%;height:160px;object-fit:cover;border-radius:8px;" />
+        <img src="bulbasaur.png" style="width:140px;height:140px;image-rendering:pixelated;display:block;margin:-4px auto 4px;" />
+        <h2>Bulbasaur is Grass/Poison type.</h2>
+        <p style="color:#d5dbdb;">Tap ATTACK on the front of the card to add 10 points, then rate the card normally.</p>
+        <div class="score" id="ankimon-score-back"></div>
+        <script>
+          (function () {
+            var score = Number(localStorage.getItem('ankimon-mobile-demo-score') || 0);
+            var target = document.getElementById('ankimon-score-back');
+            if (target) target.textContent = 'SCORE: ' + score;
+          }());
+        </script>
+      </div>
+
+- type: Basic
+  tags: [ankimon, mobile-demo, fire-type]
+  fields:
+    Front: |
+      <div class="ankimon-card" style="font-family:Arial,sans-serif;background:#17202a;color:#fff;border-radius:12px;padding:12px;text-align:center;max-width:520px;margin:auto;">
+        <div style="display:none"><img src="grass_pkmnbattlescene.png" /><img src="charmander.png" /></div>
+        <img src="grass_pkmnbattlescene.png" style="width:100%;height:160px;object-fit:cover;border-radius:8px;" />
+        <div class="battle-top" style="display:flex;justify-content:space-between;font-weight:bold;margin:8px 4px;"><span>WILD CHARMANDER</span><span>HP 100</span></div>
+        <img src="charmander.png" style="width:140px;height:140px;image-rendering:pixelated;display:block;margin:-4px auto 4px;" />
+        <div class="prompt" style="font-size:20px;font-weight:bold;margin:10px;">What type is Charmander?</div>
+        <button class="attack" style="background:#e74c3c;color:#fff;border:0;border-radius:8px;padding:12px 18px;font-weight:bold;font-size:15px;" onclick="ankimonAttack(10)">ATTACK · 10 DMG</button>
+        <div class="score" id="ankimon-score"></div>
+        <script>
+          (function () {
+            var score = Number(localStorage.getItem('ankimon-mobile-demo-score') || 0);
+            var target = document.getElementById('ankimon-score');
+            if (target) target.textContent = 'SCORE: ' + score;
+            window.ankimonAttack = function (damage) {
+              score += Number(damage || 0);
+              localStorage.setItem('ankimon-mobile-demo-score', score);
+              if (target) target.textContent = 'SCORE: ' + score + ' · HIT!';
+            };
+          }());
+        </script>
+      </div>
+    Back: |
+      <div class="ankimon-card answer" style="font-family:Arial,sans-serif;background:#17202a;color:#fff;border-radius:12px;padding:12px;text-align:center;max-width:520px;margin:auto;">
+        <div style="display:none"><img src="grass_pkmnbattlescene.png" /><img src="charmander.png" /></div>
+        <img src="grass_pkmnbattlescene.png" style="width:100%;height:160px;object-fit:cover;border-radius:8px;" />
+        <img src="charmander.png" style="width:140px;height:140px;image-rendering:pixelated;display:block;margin:-4px auto 4px;" />
+        <h2>Charmander is Fire type.</h2>
+        <p style="color:#d5dbdb;">Tap ATTACK on the front of the card to add 10 points, then rate the card normally.</p>
+        <div class="score" id="ankimon-score-back"></div>
+        <script>
+          (function () {
+            var score = Number(localStorage.getItem('ankimon-mobile-demo-score') || 0);
+            var target = document.getElementById('ankimon-score-back');
+            if (target) target.textContent = 'SCORE: ' + score;
+          }());
+        </script>
+      </div>
+
+- type: Basic
+  tags: [ankimon, mobile-demo, water-type]
+  fields:
+    Front: |
+      <div class="ankimon-card" style="font-family:Arial,sans-serif;background:#17202a;color:#fff;border-radius:12px;padding:12px;text-align:center;max-width:520px;margin:auto;">
+        <div style="display:none"><img src="grass_pkmnbattlescene.png" /><img src="squirtle.png" /></div>
+        <img src="grass_pkmnbattlescene.png" style="width:100%;height:160px;object-fit:cover;border-radius:8px;" />
+        <div class="battle-top" style="display:flex;justify-content:space-between;font-weight:bold;margin:8px 4px;"><span>WILD SQUIRTLE</span><span>HP 100</span></div>
+        <img src="squirtle.png" style="width:140px;height:140px;image-rendering:pixelated;display:block;margin:-4px auto 4px;" />
+        <div class="prompt" style="font-size:20px;font-weight:bold;margin:10px;">What type is Squirtle?</div>
+        <button class="attack" style="background:#e74c3c;color:#fff;border:0;border-radius:8px;padding:12px 18px;font-weight:bold;font-size:15px;" onclick="ankimonAttack(10)">ATTACK · 10 DMG</button>
+        <div class="score" id="ankimon-score"></div>
+        <script>
+          (function () {
+            var score = Number(localStorage.getItem('ankimon-mobile-demo-score') || 0);
+            var target = document.getElementById('ankimon-score');
+            if (target) target.textContent = 'SCORE: ' + score;
+            window.ankimonAttack = function (damage) {
+              score += Number(damage || 0);
+              localStorage.setItem('ankimon-mobile-demo-score', score);
+              if (target) target.textContent = 'SCORE: ' + score + ' · HIT!';
+            };
+          }());
+        </script>
+      </div>
+    Back: |
+      <div class="ankimon-card answer" style="font-family:Arial,sans-serif;background:#17202a;color:#fff;border-radius:12px;padding:12px;text-align:center;max-width:520px;margin:auto;">
+        <div style="display:none"><img src="grass_pkmnbattlescene.png" /><img src="squirtle.png" /></div>
+        <img src="grass_pkmnbattlescene.png" style="width:100%;height:160px;object-fit:cover;border-radius:8px;" />
+        <img src="squirtle.png" style="width:140px;height:140px;image-rendering:pixelated;display:block;margin:-4px auto 4px;" />
+        <h2>Squirtle is Water type.</h2>
+        <p style="color:#d5dbdb;">Tap ATTACK on the front of the card to add 10 points, then rate the card normally.</p>
+        <div class="score" id="ankimon-score-back"></div>
+        <script>
+          (function () {
+            var score = Number(localStorage.getItem('ankimon-mobile-demo-score') || 0);
+            var target = document.getElementById('ankimon-score-back');
+            if (target) target.textContent = 'SCORE: ' + score;
+          }());
+        </script>
+      </div>

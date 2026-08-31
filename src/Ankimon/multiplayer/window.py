@@ -514,11 +514,35 @@ class MultiplayerWindow(QDialog):
     def _friend_row_text(self, friend: dict) -> str:
         name = friend.get("username", "?")
         parts = [name, f"({self._friend_status_text(friend)})"]
+        if friend.get("pokemon"):
+            # Practice bots battle with a fixed Pokemon, so the ladder can
+            # be read without challenging each one in turn.
+            level = friend.get("level")
+            pokemon = str(friend["pokemon"])
+            parts.append(f"- {pokemon} Lv{int(level)}" if level else f"- {pokemon}")
         if friend.get("in_raid"):
             parts.append("[in raid]")
         if friend.get("in_match"):
             parts.append("[in battle]")
         return " ".join(parts)
+
+    @staticmethod
+    def _opponents(state: dict) -> list:
+        """Friends plus the practice bot ladder, in one challengeable list.
+
+        The ladder is the same for everyone and needs no friend request, so
+        a player with no friends yet still has opponents. A bot the player
+        also added as a friend is listed once, from the ladder.
+        """
+        bots = [bot for bot in state.get("bots", []) if isinstance(bot, dict)]
+        bot_names = {bot.get("raw_username") for bot in bots}
+        friends = [
+            friend
+            for friend in state.get("friends", [])
+            if isinstance(friend, dict)
+            and friend.get("raw_username") not in bot_names
+        ]
+        return friends + bots
 
     def _selected_friend(self) -> Optional[dict]:
         item = self.friend_list.currentItem()
@@ -541,6 +565,9 @@ class MultiplayerWindow(QDialog):
         friend = self._selected_friend()
         if not friend:
             tooltip("Select a friend first.")
+            return
+        if friend.get("bot") and not friend.get("added"):
+            tooltip("Practice bots are always available - nothing to remove.")
             return
         username = friend.get("raw_username") or friend.get("username")
         self._run(
@@ -803,16 +830,23 @@ class MultiplayerWindow(QDialog):
             else "Answer a card in the reviewer to attack."
         )
 
+        opponents = self._opponents(state)
+
         self.friend_list.clear()
-        for friend in state.get("friends", []):
+        for friend in opponents:
             item = QListWidgetItem(self._friend_row_text(friend))
             item.setData(0x0100, friend)
             self.friend_list.addItem(item)
 
         self.pvp_friend_list.clear()
-        for friend in state.get("friends", []):
+        for friend in opponents:
             name = friend.get("username", "?")
             suffix = " (bot)" if friend.get("bot") else ""
+            if friend.get("pokemon"):
+                level = friend.get("level")
+                suffix += f" - {friend['pokemon']}"
+                if level:
+                    suffix += f" Lv{int(level)}"
             item = QListWidgetItem(f"{name}{suffix}")
             item.setData(0x0100, friend)
             self.pvp_friend_list.addItem(item)

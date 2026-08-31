@@ -522,6 +522,7 @@ class MultiplayerController:
             "raid",
             "raid_rooms",
             "friends",
+            "bots",
             "friend_requests",
             "raid_reward",
             "pvp",
