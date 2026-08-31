@@ -2,8 +2,9 @@
 
 Opened from the Ankimon menu. All server calls go through
 MultiplayerController.run_action (background thread + main-thread callback),
-so the dialog never freezes the UI. Friend-battle moves come from the normal
-reviewer battle loop.
+so the dialog never freezes the UI. Friend-battle attacks happen in the
+reviewer, one per answered card, with a randomly chosen move - there is
+nothing to pick here.
 """
 
 from typing import Optional
@@ -615,7 +616,7 @@ class MultiplayerWindow(QDialog):
 
         reviewer_hint = QLabel(
             "Active battles are fought in the reviewer: every card you answer "
-            "is one attack, sent automatically with the move your Pokemon used."
+            "is one attack, using a move picked at random from your Pokemon's."
         )
         reviewer_hint.setWordWrap(True)
         reviewer_hint.setStyleSheet("color: #5D6D7E; font-style: italic;")

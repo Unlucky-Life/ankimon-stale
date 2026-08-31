@@ -411,7 +411,8 @@ def test_reviewer_attack_submits_active_opponent_move(multiplayer_module):
         battle_status="fighting",
     )
 
-    controller.on_reviewer_attack("thunderbolt", enemy)
+    controller.main_pokemon.attacks = ["thunderbolt"]
+    controller.on_reviewer_attack(enemy)
 
     assert submitted == [("match-1", "thunderbolt")]
     assert enemy.hp == 0
@@ -421,6 +422,31 @@ def test_reviewer_attack_submits_active_opponent_move(multiplayer_module):
     assert controller._pending_reviewer_match_id == "match-1"
 
 
+def test_reviewer_attack_picks_a_random_move(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.main_pokemon.attacks = ["thunderbolt", "quick attack", "iron tail"]
+
+    picked = {controller.random_attack() for _ in range(60)}
+
+    assert picked == {"thunderbolt", "quick attack", "iron tail"}
+
+
+def test_random_move_falls_back_to_the_server_pick(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.main_pokemon.attacks = []
+
+    # An empty move asks the server to pick one rather than skipping the
+    # attack the answered card already paid for.
+    assert controller.random_attack() == ""
+
+
+def test_random_move_reads_dict_shaped_attacks(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.main_pokemon.attacks = [{"name": "hydro pump"}, "", None]
+
+    assert controller.random_attack() == "hydro pump"
+
+
 def test_reviewer_attack_ignores_wild_encounter(multiplayer_module):
     controller = _make_controller(multiplayer_module)
     controller.state = {"pvp": {"matches": [_active_match()]}}
@@ -428,7 +454,7 @@ def test_reviewer_attack_ignores_wild_encounter(multiplayer_module):
     controller.api.submit_turn = lambda match_id, move: submitted.append((match_id, move))
     enemy = types.SimpleNamespace(id=25, tier="Normal")
 
-    controller.on_reviewer_attack("thunderbolt", enemy)
+    controller.on_reviewer_attack(enemy)
 
     assert submitted == []
 
@@ -455,8 +481,9 @@ def test_reviewer_attack_sends_the_answered_card_first(multiplayer_module):
         battle_status="fighting",
     )
 
+    controller.main_pokemon.attacks = ["thunderbolt"]
     controller.on_card_reviewed("good", 3)
-    controller.on_reviewer_attack("thunderbolt", enemy)
+    controller.on_reviewer_attack(enemy)
 
     assert calls == [("events", 1), ("turn", "thunderbolt")]
     # The batch is acknowledged only after the whole chain succeeded.
@@ -487,7 +514,7 @@ def test_reviewer_attack_keeps_the_card_queued_when_it_fails(multiplayer_module)
     )
 
     controller.on_card_reviewed("good", 3)
-    controller.on_reviewer_attack("thunderbolt", enemy)
+    controller.on_reviewer_attack(enemy)
 
     assert controller.outbox.pending_count() == 1
     assert controller._turn_submissions_inflight == set()
@@ -512,7 +539,7 @@ def test_apply_state_merges_friends_and_raid_rooms(multiplayer_module):
             {"username": "misty", "raw_username": "misty", "bot": False, "online": True}
         ],
         "friend_requests": {"incoming": [{"username": "gary"}], "outgoing": []},
-        "pvp": {"human_enabled": False, "tokens": 2, "token_progress": 4, "matches": []},
+        "pvp": {"human_enabled": False, "attack_ready": True, "matches": []},
     }
 
     controller._apply_state(new_state)

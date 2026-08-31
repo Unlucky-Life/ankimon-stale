@@ -175,7 +175,7 @@ class Reviewer_Manager:
             if self.settings.get("gui.hp_bar_config") is True:
                 hud_html += '<div id="mylife-bar" class="Ankimon"></div>'
 
-        # Multiplayer overlay (raid boss bar / PvP turn tokens), rendered
+        # Multiplayer overlay (raid boss bar / friend-battle panel), rendered
         # from the controller's cached state only — never blocks on network.
         mp_fragment = None
         try:

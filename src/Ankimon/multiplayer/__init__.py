@@ -15,6 +15,7 @@ Architecture (see docs/multiplayer-go-api-design.md):
 
 import inspect
 import json
+import random
 import threading
 from typing import Callable, Optional
 
@@ -90,12 +91,12 @@ def notify_card_reviewed(grade: str, time_elapsed: int):
             pass
 
 
-def notify_reviewer_attack(move, enemy_pokemon):
-    """Submit a PvP move produced by the normal reviewer battle loop."""
+def notify_reviewer_attack(enemy_pokemon):
+    """Submit this card's attack against the active PvP opponent."""
     if _controller is None:
         return
     try:
-        _controller.on_reviewer_attack(move, enemy_pokemon)
+        _controller.on_reviewer_attack(enemy_pokemon)
     except Exception as e:
         try:
             _controller.logger.log("error", f"Ankimon multiplayer turn: {e}")
@@ -191,14 +192,15 @@ class MultiplayerController:
         if self.outbox.pending_count() >= FLUSH_EVENT_THRESHOLD:
             self.flush_soon()
 
-    def on_reviewer_attack(self, move, enemy_pokemon):
-        """Commit the move that the regular reviewer battle just used.
+    def on_reviewer_attack(self, enemy_pokemon):
+        """Attack the active PvP opponent with one of your Pokemon's moves.
 
-        One answered card is one attack: the card that was just graded pays
-        for this move. The request is scheduled from the normal card-answer
-        hook, so the reviewer never waits for the network. The enemy marker
-        prevents an active match from spending cards while a stale wild
-        encounter is still on screen.
+        One answered card is one attack, and the move is drawn at random
+        from the Pokemon's own moves - a battle is the reviewer's rhythm,
+        not a second thing to pick. The request is scheduled from the normal
+        card-answer hook, so the reviewer never waits for the network. The
+        enemy marker prevents an active match from spending cards while a
+        stale wild encounter is still on screen.
         """
         if not self.enabled:
             return
@@ -210,11 +212,8 @@ class MultiplayerController:
             return
         self._sync_reviewer_enemy(match, enemy_pokemon)
 
-        if isinstance(move, dict):
-            move = move.get("name") or move.get("id") or ""
-        move = str(move or "").strip()
-        if not move:
-            return
+        # An empty move is valid: the server picks one for the round.
+        move = self.random_attack()
 
         self._turn_submissions_inflight.add(match_id)
         # The queued cards must reach the server first: it refuses a move
@@ -247,6 +246,24 @@ class MultiplayerController:
                 self._refresh_reviewer_pvp_battle()
 
         mw.taskman.run_in_background(task, on_done)
+
+    def random_attack(self) -> str:
+        """One of the player's own moves, chosen at random.
+
+        Returns "" when the Pokemon has no usable moves, which asks the
+        server to pick the round's move instead of skipping the attack.
+        """
+        attacks = getattr(self.main_pokemon, "attacks", None) or []
+        moves = []
+        for attack in attacks:
+            if isinstance(attack, dict):
+                attack = attack.get("name") or attack.get("id") or ""
+            attack = str(attack or "").strip()
+            if attack:
+                moves.append(attack)
+        if not moves:
+            return ""
+        return random.choice(moves)
 
     def is_reviewer_pvp_enemy(self, enemy_pokemon) -> bool:
         match = self._match_for_reviewer_enemy(enemy_pokemon)

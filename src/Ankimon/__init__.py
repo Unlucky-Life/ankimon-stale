@@ -543,9 +543,11 @@ def on_review_card(*args):
         # PvP uses the same reviewer surface and card-answer rhythm, but its
         # HP is server-authoritative. Do not also run the wild-battle engine
         # locally: that would deal a second, divergent copy of the damage and
-        # could incorrectly award/catch a friend's Pokemon on faint.
+        # could incorrectly award/catch a friend's Pokemon on faint. The move
+        # is drawn at random inside the controller, not taken from the wild
+        # battle's own pick.
         if ankimon_multiplayer.is_reviewer_pvp_enemy(enemy_pokemon):
-            ankimon_multiplayer.notify_reviewer_attack(user_attack, enemy_pokemon)
+            ankimon_multiplayer.notify_reviewer_attack(enemy_pokemon)
             _refresh_multiplayer_reviewer_battle()
             return
 
