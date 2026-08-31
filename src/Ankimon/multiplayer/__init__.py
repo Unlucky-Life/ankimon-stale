@@ -115,6 +115,20 @@ def is_reviewer_pvp_enemy(enemy_pokemon) -> bool:
         return False
 
 
+def sync_reviewer_enemy(enemy_pokemon) -> bool:
+    """Copy the server's opponent HP onto the reviewer's enemy Pokemon.
+
+    Returns False when the reviewer is not showing the active opponent, so
+    callers can leave a wild encounter untouched.
+    """
+    if _controller is None:
+        return False
+    try:
+        return _controller.is_reviewer_pvp_enemy(enemy_pokemon)
+    except Exception:
+        return False
+
+
 class MultiplayerController:
     def __init__(
         self,
@@ -243,13 +257,7 @@ class MultiplayerController:
             fresh_match = self._pvp_match_by_id(state, match_id)
             if fresh_match is not None:
                 self._sync_reviewer_enemy(fresh_match, enemy_pokemon)
-                if self._refresh_reviewer_battle is not None:
-                    try:
-                        self._refresh_reviewer_battle()
-                    except Exception as exc:
-                        self.logger.log(
-                            "warning", f"Could not refresh reviewer PvP battle: {exc}"
-                        )
+                self._refresh_reviewer_pvp_battle()
 
         mw.taskman.run_in_background(task, on_done)
 
@@ -287,6 +295,28 @@ class MultiplayerController:
             if match.get("id") == match_id:
                 return match
         return None
+
+    @staticmethod
+    def _pvp_hp_changed(old_match: Optional[dict], new_match: Optional[dict]) -> bool:
+        if old_match is None or new_match is None:
+            return False
+
+        def hp_pair(match: dict):
+            opponent = match.get("opponent_pokemon") or {}
+            opponent_hp = opponent.get("hp")
+            if opponent_hp is None:
+                opponent_hp = match.get("opponent_hp")
+            return (opponent_hp, match.get("your_hp"), match.get("round"))
+
+        return hp_pair(old_match) != hp_pair(new_match)
+
+    def _refresh_reviewer_pvp_battle(self):
+        if self._refresh_reviewer_battle is None:
+            return
+        try:
+            self._refresh_reviewer_battle()
+        except Exception as exc:
+            self.logger.log("warning", f"Could not refresh reviewer PvP battle: {exc}")
 
     def _start_pending_reviewer_battle(self):
         if self._pending_reviewer_match_id is None or self._start_reviewer_battle is None:
@@ -446,6 +476,10 @@ class MultiplayerController:
         self._derive_toasts(old_state, merged)
         self._claim_raid_reward(merged.get("raid_reward"))
         self.state = merged
+        if old_match_id == new_match_id and self._pvp_hp_changed(old_match, new_match):
+            # The opponent (or a bot) moved between our own turns; the
+            # reviewer HP bar is server-authoritative, so redraw it.
+            self._refresh_reviewer_pvp_battle()
         if "pvp" in new_state:
             self._confirmed_pvp_tokens = int(
                 (merged.get("pvp") or {}).get("tokens", 0) or 0

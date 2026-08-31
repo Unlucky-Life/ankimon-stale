@@ -183,6 +183,10 @@ def _refresh_multiplayer_reviewer_battle():
     if getattr(mw, "reviewer", None) is None:
         return False
 
+    # Friend/bot HP is server-authoritative: pull the latest value onto the
+    # on-screen enemy before redrawing, exactly like a raid boss bar.
+    ankimon_multiplayer.sync_reviewer_enemy(enemy_pokemon)
+
     class Container(object):
         pass
 

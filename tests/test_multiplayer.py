@@ -246,6 +246,61 @@ def test_new_active_match_replaces_encounter_on_next_review(multiplayer_module):
     assert starts == [True]
 
 
+def test_opponent_damage_refreshes_the_reviewer_battle(multiplayer_module):
+    refreshes = []
+    controller = multiplayer_module.MultiplayerController(
+        FakeSettings(**{"multiplayer.enabled": True}),
+        FakeLogger(),
+        types.SimpleNamespace(level=10),
+        refresh_reviewer_battle=lambda: refreshes.append(True) or True,
+    )
+    controller.state = {"pvp": {"matches": [_active_match()]}}
+
+    hurt = _active_match(your_hp=60)
+    hurt["opponent_pokemon"] = dict(hurt["opponent_pokemon"], hp=40)
+    controller._apply_state({"pvp": {"matches": [hurt]}})
+
+    assert refreshes == [True]
+
+
+def test_unchanged_match_does_not_refresh_the_reviewer_battle(multiplayer_module):
+    refreshes = []
+    controller = multiplayer_module.MultiplayerController(
+        FakeSettings(**{"multiplayer.enabled": True}),
+        FakeLogger(),
+        types.SimpleNamespace(level=10),
+        refresh_reviewer_battle=lambda: refreshes.append(True) or True,
+    )
+    controller.state = {"pvp": {"matches": [_active_match()]}}
+
+    controller._apply_state({"pvp": {"matches": [_active_match()]}})
+
+    assert refreshes == []
+
+
+def test_sync_reviewer_enemy_copies_server_hp(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    match = _active_match()
+    match["opponent_pokemon"] = dict(match["opponent_pokemon"], hp=30)
+    controller.state = {"pvp": {"matches": [match]}}
+    enemy = types.SimpleNamespace(
+        id=25, tier="PvP: gary", hp=100, current_hp=100, max_hp=100,
+        battle_status="fighting",
+    )
+
+    assert controller.is_reviewer_pvp_enemy(enemy) is True
+    assert enemy.hp == 30
+    assert enemy.current_hp == 30
+    assert enemy.max_hp == 100
+
+    wild = types.SimpleNamespace(
+        id=25, tier="Normal", hp=100, current_hp=100, max_hp=100,
+        battle_status="fighting",
+    )
+    assert controller.is_reviewer_pvp_enemy(wild) is False
+    assert wild.hp == 100
+
+
 def test_again_does_not_charge_local_turn_progress(multiplayer_module):
     controller = _make_controller(multiplayer_module)
     controller.state = {"pvp": {"tokens": 0, "token_progress": 9, "matches": []}}
@@ -493,7 +548,8 @@ def test_hud_fragment_with_active_raid(hud_module):
     html, css = result
     assert "Articuno" in html
     assert "50%" in html
-    assert "ankimon-mp-raid" in css
+    assert 'id="ankimon-mp-raid"' in html
+    assert "ankimon-mp-panel" in css
 
 
 def test_hud_tells_player_when_reviewer_attack_is_ready(hud_module):
@@ -512,6 +568,90 @@ def test_hud_tells_player_when_reviewer_attack_is_ready(hud_module):
     html, _css = hud_module.build_hud_fragment(state)
 
     assert "ATTACK READY" in html
+
+
+def _battle_state(**match_overrides):
+    match = {
+        "status": "active",
+        "opponent": "gary",
+        "your_move_committed": False,
+        "opponent_move_committed": False,
+        "opponent_pokemon": {
+            "name": "gengar",
+            "id": 94,
+            "level": 50,
+            "hp": 30,
+            "max_hp": 120,
+        },
+    }
+    match.update(match_overrides)
+    return {"pvp": {"tokens": 1, "matches": [match]}}
+
+
+def test_hud_shows_friend_battle_like_a_raid_boss(hud_module):
+    html, css = hud_module.build_hud_fragment(_battle_state())
+
+    assert 'id="ankimon-mp-battle"' in html
+    assert "GARY" in html
+    assert "Gengar" in html
+    assert "Lv50" in html
+    # Same panel shape and live HP bar as the raid boss.
+    assert "ankimon-mp-panel" in html
+    assert "ankimon-mp-track" in html
+    assert "width:25.0%" in html
+    assert "25%" in html
+    assert "ankimon-mp-fill-battle" in css
+
+
+def test_hud_battle_panel_waits_for_the_opponent(hud_module):
+    html, _css = hud_module.build_hud_fragment(
+        _battle_state(your_move_committed=True)
+    )
+
+    assert "WAITING FOR OPPONENT" in html
+    assert "ATTACK READY" not in html
+
+
+def test_hud_battle_panel_asks_for_cards_without_tokens(hud_module):
+    state = _battle_state()
+    state["pvp"]["tokens"] = 0
+
+    html, _css = hud_module.build_hud_fragment(state)
+
+    assert "ANSWER CARDS TO CHARGE" in html
+
+
+def test_hud_shows_raid_and_battle_together(hud_module):
+    state = _battle_state()
+    state["raid"] = {
+        "boss_name": "Articuno",
+        "boss_id": 144,
+        "boss_hp": 5000,
+        "boss_max_hp": 10000,
+    }
+
+    html, _css = hud_module.build_hud_fragment(state)
+
+    assert 'id="ankimon-mp-raid"' in html
+    assert 'id="ankimon-mp-battle"' in html
+
+
+def test_hud_battle_panel_falls_back_to_match_hp(hud_module):
+    state = _battle_state(opponent_hp=60)
+    state["pvp"]["matches"][0]["opponent_pokemon"].pop("hp")
+
+    html, _css = hud_module.build_hud_fragment(state)
+
+    assert "50%" in html
+
+
+def test_hud_battle_panel_escapes_opponent_names(hud_module):
+    html, _css = hud_module.build_hud_fragment(
+        _battle_state(opponent="<script>x</script>")
+    )
+
+    assert "<script>" not in html
+    assert "&lt;SCRIPT&gt;" in html
 
 
 # --- Raid reward claiming ---------------------------------------------------
