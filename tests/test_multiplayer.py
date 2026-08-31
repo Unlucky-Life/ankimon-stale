@@ -577,6 +577,30 @@ def test_reviewer_attack_keeps_the_card_queued_when_it_fails(multiplayer_module)
     assert controller._turn_submissions_inflight == set()
 
 
+def test_apply_state_keeps_the_bot_ladder(multiplayer_module):
+    controller = _make_controller(multiplayer_module)
+    controller.state = {}
+
+    controller._apply_state(
+        {
+            "friends": [],
+            "bots": [
+                {
+                    "username": "brock",
+                    "raw_username": "bot:brock",
+                    "challenge_value": "bot:brock",
+                    "bot": True,
+                    "pokemon": "Onix",
+                    "level": 20,
+                }
+            ],
+        }
+    )
+
+    # Dropping this key is what used to leave the friends list empty.
+    assert [bot["username"] for bot in controller.state["bots"]] == ["brock"]
+
+
 def test_apply_state_merges_friends_and_raid_rooms(multiplayer_module):
     controller = _make_controller(multiplayer_module)
     controller.state = {}
