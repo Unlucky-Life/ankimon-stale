@@ -824,3 +824,51 @@ def test_toast_names_the_player_a_stalled_battle_is_waiting_on(multiplayer_modul
         multiplayer_module, _open_match(), _open_match(status="stalled")
     )
     assert "gary" in message and "on hold" in message
+
+
+def test_the_round_result_carries_the_ending_state(multiplayer_module, monkeypatch):
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match()
+    )
+    controller._resolve_open_rounds()
+    # Reported so the server can hand it back next round; it is kept there
+    # only if the opponent reported the same one.
+    assert submissions[0]["state"] == {"carried": "engine-state"}
+
+
+def test_the_servers_carried_state_wins_over_the_local_cache(multiplayer_module, monkeypatch):
+    match = _open_match()
+    match["resolution"]["round"] = 2
+    match["resolution"]["carried_state"] = {"carried": "from-server"}
+    controller, resolution, _ = _resolving_controller(
+        multiplayer_module, monkeypatch, match
+    )
+    # A stale local copy must not be preferred: the server's is the one both
+    # clients agreed on, so it is the one the opponent is simulating from.
+    controller.state["pvp_battle_states"] = {
+        "m1": {"after_round": 1, "state": {"carried": "stale-local"}}
+    }
+    controller._resolve_open_rounds()
+    assert resolution.calls[0]["carried_state"] == {"carried": "from-server"}
+
+
+def test_the_local_cache_is_used_when_the_server_carries_nothing(multiplayer_module, monkeypatch):
+    match = _open_match()
+    match["resolution"]["round"] = 2
+    controller, resolution, _ = _resolving_controller(
+        multiplayer_module, monkeypatch, match
+    )
+    controller.state["pvp_battle_states"] = {
+        "m1": {"after_round": 1, "state": {"carried": "local"}}
+    }
+    controller._resolve_open_rounds()
+    assert resolution.calls[0]["carried_state"] == {"carried": "local"}
+
+
+def test_finished_battles_stop_taking_up_cache(multiplayer_module, monkeypatch):
+    controller, _, _ = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match(status="finished", resolution=None)
+    )
+    controller.state["pvp_battle_states"] = {"m1": {"after_round": 4, "state": {}}}
+    controller._resolve_open_rounds()
+    assert controller.state["pvp_battle_states"] == {}

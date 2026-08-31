@@ -279,6 +279,7 @@ class MultiplayerApiClient:
         hp_after: dict,
         engine_version: Optional[str] = None,
         log_digest: Optional[str] = None,
+        state: Optional[dict] = None,
     ) -> dict:
         """Report this client's simulation of an open round.
 
@@ -291,6 +292,11 @@ class MultiplayerApiClient:
             payload["engine_version"] = engine_version
         if log_digest:
             payload["log_digest"] = log_digest
+        if state is not None:
+            # The end-of-round battle state. The server keeps it only when
+            # both clients sent the same one, and hands it back with the
+            # next round so a lost local cache cannot cost the match.
+            payload["state"] = state
         return self._request(
             "POST", f"/matches/{match_id}/rounds/{round_number}/result", payload=payload
         )
