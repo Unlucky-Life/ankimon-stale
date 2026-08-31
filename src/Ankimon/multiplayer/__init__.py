@@ -297,6 +297,22 @@ class MultiplayerController:
         return None
 
     @staticmethod
+    def _pvp_opponent_switched(
+        old_match: Optional[dict], new_match: Optional[dict]
+    ) -> bool:
+        if old_match is None or new_match is None:
+            return False
+
+        def opponent_id(match: dict) -> int:
+            try:
+                return int((match.get("opponent_pokemon") or {}).get("id") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        new_id = opponent_id(new_match)
+        return new_id > 0 and opponent_id(old_match) != new_id
+
+    @staticmethod
     def _pvp_hp_changed(old_match: Optional[dict], new_match: Optional[dict]) -> bool:
         if old_match is None or new_match is None:
             return False
@@ -344,6 +360,32 @@ class MultiplayerController:
         if self._seconds_since_sync >= poll_after:
             self.refresh_state()
 
+    def active_pokemon_payload(self) -> Optional[dict]:
+        """The selected Pokemon to advertise to opponents, or None.
+
+        A friend challenging this player battles this Pokemon, so it is sent
+        with every event batch (it changes whenever the player switches) and
+        again when a battle is created or accepted.
+        """
+        pokemon = self.main_pokemon
+        if pokemon is None:
+            return None
+        try:
+            pokemon_id = int(getattr(pokemon, "id", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        if pokemon_id <= 0:
+            return None
+        try:
+            level = int(getattr(pokemon, "level", 0) or 0)
+        except (TypeError, ValueError):
+            level = 0
+        return {
+            "name": str(getattr(pokemon, "name", "") or "").capitalize(),
+            "id": pokemon_id,
+            "level": max(0, min(level, 100)),
+        }
+
     def flush_soon(self):
         """Send the next outbox batch in the background."""
         if self._flush_inflight or not self.enabled:
@@ -353,8 +395,10 @@ class MultiplayerController:
             return
         self._flush_inflight = True
 
+        active_pokemon = self.active_pokemon_payload()
+
         def task():
-            return self.api.post_events(batch)
+            return self.api.post_events(batch, active_pokemon)
 
         def on_done(future):
             self._flush_inflight = False
@@ -468,7 +512,14 @@ class MultiplayerController:
         new_match = self._active_pvp_match(merged)
         old_match_id = old_match.get("id") if old_match is not None else None
         new_match_id = new_match.get("id") if new_match is not None else None
-        if old_match_id != new_match_id:
+        # Rebuild the reviewer encounter when the battle itself changes: a
+        # new/finished match, or the friend switching their Pokemon mid
+        # battle (the on-screen enemy is matched by species id, so a stale
+        # one would stop taking our attacks).
+        restart_encounter = old_match_id != new_match_id or self._pvp_opponent_switched(
+            old_match, new_match
+        )
+        if restart_encounter:
             # The same callback loads either the newly active opponent or,
             # when a match ends, the next raid/wild encounter selected by
             # the installed encounter wrapper.
@@ -476,7 +527,13 @@ class MultiplayerController:
         self._derive_toasts(old_state, merged)
         self._claim_raid_reward(merged.get("raid_reward"))
         self.state = merged
-        if old_match_id == new_match_id and self._pvp_hp_changed(old_match, new_match):
+        if restart_encounter:
+            # Swap the encounter as soon as the battle starts (or ends) so a
+            # wild Pokemon is never on screen during a friend battle. If the
+            # reviewer is closed the callback reports False and the swap is
+            # retried on the next reviewed card.
+            self._start_pending_reviewer_battle()
+        elif self._pvp_hp_changed(old_match, new_match):
             # The opponent (or a bot) moved between our own turns; the
             # reviewer HP bar is server-authoritative, so redraw it.
             self._refresh_reviewer_pvp_battle()

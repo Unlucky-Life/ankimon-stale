@@ -229,7 +229,7 @@ class ImmediateFuture:
         return self.value
 
 
-def test_new_active_match_replaces_encounter_on_next_review(multiplayer_module):
+def test_new_active_match_replaces_the_encounter_immediately(multiplayer_module):
     starts = []
     controller = multiplayer_module.MultiplayerController(
         FakeSettings(**{"multiplayer.enabled": True}),
@@ -241,9 +241,77 @@ def test_new_active_match_replaces_encounter_on_next_review(multiplayer_module):
 
     controller._apply_state({"pvp": {"matches": [_active_match()]}})
 
-    assert starts == []
+    # No wild Pokemon stays on screen once a friend battle starts.
+    assert starts == [True]
     controller.on_card_reviewed("good", 4)
     assert starts == [True]
+
+
+def test_encounter_swap_retries_when_the_reviewer_is_closed(multiplayer_module):
+    starts = []
+
+    def start():
+        starts.append(True)
+        return len(starts) > 1  # closed reviewer first, open on the retry
+
+    controller = multiplayer_module.MultiplayerController(
+        FakeSettings(**{"multiplayer.enabled": True}),
+        FakeLogger(),
+        types.SimpleNamespace(level=10),
+        start_reviewer_battle=start,
+    )
+    controller.state = {"pvp": {"matches": []}}
+
+    controller._apply_state({"pvp": {"matches": [_active_match()]}})
+    assert len(starts) == 1
+
+    controller.on_card_reviewed("good", 4)
+    assert len(starts) == 2
+    controller.on_card_reviewed("good", 4)
+    assert len(starts) == 2
+
+
+def test_opponent_switching_pokemon_rebuilds_the_encounter(multiplayer_module):
+    starts = []
+    controller = multiplayer_module.MultiplayerController(
+        FakeSettings(**{"multiplayer.enabled": True}),
+        FakeLogger(),
+        types.SimpleNamespace(level=10),
+        start_reviewer_battle=lambda: starts.append(True) or True,
+    )
+    controller.state = {"pvp": {"matches": [_active_match()]}}
+
+    switched = _active_match()
+    switched["opponent_pokemon"] = {
+        "id": 143, "name": "snorlax", "hp": 100, "max_hp": 100,
+    }
+    controller._apply_state({"pvp": {"matches": [switched]}})
+
+    assert starts == [True]
+
+
+def test_active_pokemon_payload_reports_the_selected_pokemon(multiplayer_module):
+    controller = multiplayer_module.MultiplayerController(
+        FakeSettings(**{"multiplayer.enabled": True}),
+        FakeLogger(),
+        types.SimpleNamespace(id=143, name="snorlax", level=62),
+    )
+
+    assert controller.active_pokemon_payload() == {
+        "name": "Snorlax",
+        "id": 143,
+        "level": 62,
+    }
+
+
+def test_active_pokemon_payload_skips_an_unusable_pokemon(multiplayer_module):
+    controller = multiplayer_module.MultiplayerController(
+        FakeSettings(**{"multiplayer.enabled": True}),
+        FakeLogger(),
+        types.SimpleNamespace(id=0, name="", level=5),
+    )
+
+    assert controller.active_pokemon_payload() is None
 
 
 def test_opponent_damage_refreshes_the_reviewer_battle(multiplayer_module):
@@ -652,6 +720,129 @@ def test_hud_battle_panel_escapes_opponent_names(hud_module):
 
     assert "<script>" not in html
     assert "&lt;SCRIPT&gt;" in html
+
+
+# --- Encounter selection ----------------------------------------------------
+
+
+@pytest.fixture
+def encounter_module():
+    saved = dict(sys.modules)
+    try:
+        _stub_package("Ankimon")
+        _stub_package("Ankimon.functions")
+        _stub_package("Ankimon.multiplayer")
+
+        pokedex = types.ModuleType("Ankimon.functions.pokedex_functions")
+        pokedex.get_all_pokemon_moves = lambda name, level: ["Tackle", "Growl"]
+        pokedex.get_base_experience = lambda actual_id: 100
+        pokedex.get_effort_values = lambda actual_id: {"hp": 1}
+        pokedex.get_growth_rate = lambda pokemon_id: "medium"
+        pokedex.search_pokedex_by_id = lambda pokemon_id: {
+            143: "snorlax",
+            144: "articuno",
+            25: "pikachu",
+        }.get(int(pokemon_id), "")
+        pokedex.search_pokedex = lambda name, key: {
+            "types": ["normal"],
+            "baseStats": {
+                "hp": 100, "atk": 100, "def": 100, "spa": 100, "spd": 100, "spe": 100
+            },
+            "abilities": {"0": "immunity"},
+            "actual_id": 1,
+        }.get(key)
+        sys.modules["Ankimon.functions.pokedex_functions"] = pokedex
+
+        pokemon_functions = types.ModuleType("Ankimon.functions.pokemon_functions")
+        pokemon_functions.pick_random_gender = lambda name: "M"
+        sys.modules["Ankimon.functions.pokemon_functions"] = pokemon_functions
+
+        utils = types.ModuleType("Ankimon.utils")
+        utils.get_ev_spread = lambda mode: {"hp": 4}
+        sys.modules["Ankimon.utils"] = utils
+
+        yield _load_from_path(
+            "Ankimon.multiplayer.encounter",
+            os.path.join(ANKIMON, "multiplayer", "encounter.py"),
+        )
+    finally:
+        sys.modules.clear()
+        sys.modules.update(saved)
+
+
+def _encounter_controller(**state):
+    return types.SimpleNamespace(state=state, logger=FakeLogger())
+
+
+def _tracker():
+    return types.SimpleNamespace(pokemon_encounter=1, cards_battle_round=3)
+
+
+TIER_INDEX = 14
+NAME_INDEX = 0
+LEVEL_INDEX = 2
+
+
+def test_friend_battle_replaces_the_wild_encounter(encounter_module):
+    match = _active_match()
+    match["opponent_pokemon"] = {"id": 143, "name": "Snorlax", "level": 62, "hp": 80}
+    controller = _encounter_controller(pvp={"matches": [match]})
+
+    result = encounter_module._build_pvp_opponent_tuple(match, 10, _tracker())
+
+    assert result[NAME_INDEX] == "snorlax"
+    assert result[LEVEL_INDEX] == 62
+    assert result[TIER_INDEX] == "PvP: gary"
+    assert encounter_module._active_pvp_match_from_controller(controller) is match
+
+
+def test_friend_battle_outranks_a_raid_boss(encounter_module):
+    match = _active_match()
+    match["opponent_pokemon"] = {"id": 143, "name": "Snorlax", "level": 62, "hp": 80}
+    controller = _encounter_controller(
+        pvp={"matches": [match]},
+        raid={"boss_id": 144, "boss_name": "Articuno", "boss_level": 70, "boss_hp": 5000},
+    )
+    calls = []
+
+    def original(main_pokemon_level, tracker):
+        calls.append(True)
+        return ("wild", 0)
+
+    module_globals = {}
+    encounter_functions = types.ModuleType("Ankimon.functions.encounter_functions")
+    encounter_functions.generate_random_pokemon = original
+    sys.modules["Ankimon.functions.encounter_functions"] = encounter_functions
+
+    encounter_module.install_raid_boss_encounter_patch(controller, module_globals)
+    patched = module_globals["generate_random_pokemon"]
+
+    result = patched(10, _tracker())
+
+    assert calls == []
+    assert result[NAME_INDEX] == "snorlax"
+    assert result[TIER_INDEX] == "PvP: gary"
+
+    # With the battle over, the raid boss takes the slot back.
+    controller.state["pvp"] = {"matches": []}
+    result = patched(10, _tracker())
+    assert calls == []
+    assert result[TIER_INDEX] == "Raid Boss"
+
+    # And with neither, the normal wild roll runs.
+    controller.state["raid"] = {}
+    assert patched(10, _tracker()) == ("wild", 0)
+    assert calls == [True]
+
+
+def test_finished_battle_does_not_hold_the_encounter(encounter_module):
+    finished = _active_match(status="finished")
+    fainted = _active_match(id="match-2")
+    fainted["opponent_pokemon"] = dict(fainted["opponent_pokemon"], hp=0)
+
+    controller = _encounter_controller(pvp={"matches": [finished, fainted]})
+
+    assert encounter_module._active_pvp_match_from_controller(controller) is None
 
 
 # --- Raid reward claiming ---------------------------------------------------

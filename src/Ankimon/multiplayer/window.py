@@ -316,7 +316,9 @@ class MultiplayerWindow(QDialog):
     def _on_challenge_test_bot(self):
         self._run(
             "Challenging test bot...",
-            lambda: self.controller.api.challenge_friend("bot:ankimon-test"),
+            lambda: self.controller.api.challenge_friend(
+                "bot:ankimon-test", self.controller.active_pokemon_payload()
+            ),
         )
 
     # --- Raid tab ---------------------------------------------------------
@@ -663,7 +665,9 @@ class MultiplayerWindow(QDialog):
             return
         self._run(
             f"Challenging {friend.get('username', opponent)}...",
-            lambda: self.controller.api.challenge_friend(opponent),
+            lambda: self.controller.api.challenge_friend(
+                opponent, self.controller.active_pokemon_payload()
+            ),
         )
 
     def _on_challenge(self):
@@ -676,7 +680,9 @@ class MultiplayerWindow(QDialog):
             return
         self._run(
             f"Challenging {opponent}...",
-            lambda: self.controller.api.challenge_friend(opponent),
+            lambda: self.controller.api.challenge_friend(
+                opponent, self.controller.active_pokemon_payload()
+            ),
         )
 
     def _on_respond(self, accept: bool):
@@ -686,7 +692,9 @@ class MultiplayerWindow(QDialog):
             return
         self._run(
             "Sending response...",
-            lambda: self.controller.api.respond_to_challenge(match["id"], accept),
+            lambda: self.controller.api.respond_to_challenge(
+                match["id"], accept, self.controller.active_pokemon_payload()
+            ),
         )
 
     # --- Shared plumbing --------------------------------------------------
