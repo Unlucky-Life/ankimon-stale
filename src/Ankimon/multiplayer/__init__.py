@@ -353,15 +353,36 @@ class MultiplayerController:
         for match in (new_state.get("pvp") or {}).get("matches", []):
             old_match = old_matches.get(match.get("id"), {})
             opponent = match.get("opponent", "Your rival")
+            resolution = match.get("resolution") or {}
+            old_resolution = old_match.get("resolution") or {}
+            status = match.get("status")
+            old_status = old_match.get("status")
             if match.get("incoming_challenge") and not old_match.get(
                 "incoming_challenge"
             ):
                 self._queue_toast(f"{opponent} challenged you to a battle!")
+            elif status == "suspended" and old_status not in (None, "suspended"):
+                # A battle that ends with no winner and no explanation reads
+                # as the addon losing it.
+                reason = match.get("suspended_reason") or "the two games disagreed"
+                self._queue_toast(
+                    f"Battle against {opponent} suspended - {reason}. "
+                    "No winner, and your turn token came back."
+                )
+            elif status == "stalled" and old_status not in (None, "stalled"):
+                self._queue_toast(
+                    f"{opponent} has not confirmed the round yet - the battle is on hold."
+                )
+            elif resolution.get("attempt", 1) > old_resolution.get("attempt", 1):
+                self._queue_toast(
+                    f"Round {resolution.get('round', '')} against {opponent} "
+                    "is being replayed - no damage was applied."
+                )
             elif match.get("opponent_move_committed") and not old_match.get(
                 "opponent_move_committed"
             ):
                 self._queue_toast(f"{opponent} committed their move!")
-            elif match.get("status") == "finished" and old_match.get("status") not in (
+            elif status == "finished" and old_status not in (
                 None,
                 "finished",
             ):
