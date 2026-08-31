@@ -9,6 +9,8 @@ committed, deliberately outside the reviewer.
 from typing import Optional
 
 from aqt.utils import showInfo, tooltip
+from PyQt6.QtCore import QByteArray, QSize
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -21,9 +23,11 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from . import get_controller
@@ -43,9 +47,29 @@ def open_multiplayer_window():
         _window = MultiplayerWindow(controller)
     _window.refresh_from_state()
     _window.check_server_health()
+    # Re-check the fit on every open: the window is a long-lived singleton,
+    # and the screen it opens onto can change between two openings (an
+    # external monitor unplugged, a resolution or scaling change).
+    _window.fit_to_screen()
     _window.show()
     _window.raise_()
     _window.activateWindow()
+
+
+# Preferred size when nothing has been remembered yet. Treated as a wish,
+# not a demand: PREFERRED_SIZE is clamped to whatever the screen actually
+# offers, so a 700px-tall window never opens taller than a short screen.
+PREFERRED_SIZE = QSize(600, 700)
+
+# The floor the dialog can be dragged down to. Everything above it scrolls,
+# so this is about what stays usable, not about what fits.
+MINIMUM_SIZE = QSize(420, 320)
+
+# Kept clear of the screen edges so the title bar and the resize corner are
+# always grabbable, whatever the taskbar is doing.
+SCREEN_MARGIN = 80
+
+GEOMETRY_SETTING = "multiplayer.window_geometry"
 
 
 class MultiplayerWindow(QDialog):
@@ -53,9 +77,18 @@ class MultiplayerWindow(QDialog):
         super().__init__()
         self.controller = controller
         self.setWindowTitle("Ankimon Multiplayer")
-        self.resize(600, 700)
 
-        layout = QVBoxLayout(self)
+        # A grip in the corner: on some Linux window managers a QDialog is
+        # otherwise awkward to grab by its edges.
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(MINIMUM_SIZE)
+
+        # The three tabs and their group boxes have a tall combined minimum.
+        # Putting the whole body in a scroll area means that minimum stops
+        # being the dialog's minimum, which is what actually lets the window
+        # be dragged smaller instead of springing back.
+        body = QWidget()
+        layout = QVBoxLayout(body)
         layout.addWidget(self._build_connection_group())
         layout.addWidget(self._build_demo_group())
 
@@ -68,6 +101,91 @@ class MultiplayerWindow(QDialog):
         refresh_button = QPushButton("Refresh")
         refresh_button.clicked.connect(self.refresh_from_server)
         layout.addWidget(refresh_button)
+
+        scroll = QScrollArea()
+        scroll.setWidget(body)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        self._restore_geometry()
+
+    # --- Sizing -----------------------------------------------------------
+
+    def _available_size(self) -> QSize:
+        """The usable area of the screen this window will appear on."""
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return PREFERRED_SIZE
+        area = screen.availableGeometry()
+        return QSize(
+            max(MINIMUM_SIZE.width(), area.width() - SCREEN_MARGIN),
+            max(MINIMUM_SIZE.height(), area.height() - SCREEN_MARGIN),
+        )
+
+    def _restore_geometry(self) -> None:
+        """Reopen at the remembered size, or at a size the screen can hold.
+
+        The remembered geometry is still clamped: it may have been saved on
+        a larger monitor, or on a laptop that has since been undocked, and
+        restoring it verbatim would put the window back off-screen — the
+        one state a user cannot drag their way out of.
+        """
+        available = self._available_size()
+        stored = self.controller.settings.get(GEOMETRY_SETTING, "")
+        if stored:
+            try:
+                self.restoreGeometry(QByteArray.fromBase64(stored.encode("ascii")))
+            except (ValueError, TypeError):
+                pass
+
+        size = self.size() if stored else PREFERRED_SIZE
+        self.resize(
+            min(size.width(), available.width()),
+            min(size.height(), available.height()),
+        )
+        self._move_onto_screen()
+
+    def _move_onto_screen(self) -> None:
+        """Nudge the window fully inside its screen's usable area."""
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        frame = self.frameGeometry()
+        x = min(max(frame.x(), area.left()), max(area.left(), area.right() - frame.width()))
+        y = min(max(frame.y(), area.top()), max(area.top(), area.bottom() - frame.height()))
+        self.move(x, y)
+
+    def fit_to_screen(self) -> None:
+        """Shrink the window to the current screen and pull it into view."""
+        available = self._available_size()
+        self.resize(
+            min(self.width(), available.width()),
+            min(self.height(), available.height()),
+        )
+        self._move_onto_screen()
+
+    def _save_geometry(self) -> None:
+        try:
+            encoded = bytes(self.saveGeometry().toBase64()).decode("ascii")
+            self.controller.settings.set(GEOMETRY_SETTING, encoded)
+        except Exception:
+            # Remembering the window size is a convenience; never let it
+            # stop the window from closing.
+            pass
+
+    def closeEvent(self, event):
+        self._save_geometry()
+        super().closeEvent(event)
+
+    def reject(self):
+        # Escape closes a QDialog through reject(), not closeEvent().
+        self._save_geometry()
+        super().reject()
 
     # --- Connection -------------------------------------------------------
 
