@@ -11,6 +11,7 @@ import math
 from .battle import Move
 from .objects import Pokemon, State, StateMutator, Side
 from .helpers import normalize_name
+from .canonical import canonical_outcome_key
 from .find_state_instructions import get_all_state_instructions
 from ..pyobj.error_handler import show_warning_with_traceback
 
@@ -224,6 +225,16 @@ def simulate_battle_with_poke_engine(
         # Get all possible outcomes
         transpose_instructions = get_all_state_instructions(
             mutator, main_move_normalized, enemy_move_normalized
+        )
+
+        # Draw in a canonical order. rng.choices indexes into the list, so the
+        # same seed only reproduces the same outcome if the list is ordered the
+        # same way on both machines - which peer-verified PvP depends on
+        # (docs/multiplayer-pvp-phase-d.md, item D2). The engine's own order is
+        # stable today, so this is insurance against a future engine change or
+        # a different interpreter, not a fix for a known reordering.
+        transpose_instructions = sorted(
+            transpose_instructions, key=canonical_outcome_key
         )
 
         # Randomly select ONE outcome from possible outcomes, using probability weights for the outcomes in actual Pokemon battles

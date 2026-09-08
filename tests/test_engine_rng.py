@@ -157,6 +157,74 @@ def test_omitting_rng_keeps_using_the_shared_generator(engine, make_battle):
     assert random.getstate() != state_before
 
 
+def test_outcome_draw_is_independent_of_generation_order(engine, make_battle):
+    """Item D2: the same seed must pick the same outcome even if the engine
+    hands back the possibilities in a different order.
+
+    Shuffling the engine's return value is the only way to simulate the
+    reordering this guards against - the engine's own order is stable today,
+    which is exactly why a regression in it would otherwise go unnoticed until
+    two clients disagreed mid-match.
+    """
+    real = engine.get_all_state_instructions
+
+    def reversed_outcomes(mutator, user_move, opponent_move):
+        return list(reversed(real(mutator, user_move, opponent_move)))
+
+    baseline = _outcome(engine, make_battle, rng=random.Random(31337))
+
+    engine.get_all_state_instructions = reversed_outcomes
+    try:
+        reordered = _outcome(engine, make_battle, rng=random.Random(31337))
+    finally:
+        engine.get_all_state_instructions = real
+
+    assert reordered == baseline
+
+
+def test_canonical_outcome_key_is_a_total_order(engine):
+    outcomes = [
+        types.SimpleNamespace(instructions=[["damage", "opponent", 7]], percentage=0.5),
+        types.SimpleNamespace(instructions=[["damage", "opponent", 6]], percentage=0.5),
+        types.SimpleNamespace(instructions=[["damage", "opponent", 6]], percentage=0.2),
+    ]
+    ordered = sorted(outcomes, key=engine.canonical_outcome_key)
+    assert [(o.instructions[0][2], o.percentage) for o in ordered] == [(6, 0.2), (6, 0.5), (7, 0.5)]
+    # Sorting an already-sorted list must not move anything.
+    assert sorted(ordered, key=engine.canonical_outcome_key) == ordered
+
+
+def _load_round_hash():
+    name = "Ankimon.multiplayer.round_hash"
+    _stub_package("Ankimon.multiplayer", os.path.join(ANKIMON, "multiplayer"))
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(ANKIMON, "multiplayer", "round_hash.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_seeded_turns_agree_on_the_state_hash(engine, make_battle):
+    """The whole point of D1, D2 and D4 together: two clients running the same
+    round from the same seed report the same hash, and a different round does
+    not collide with it."""
+    round_hash = _load_round_hash()
+
+    def resolved_state(seed):
+        main_pokemon, enemy_pokemon = make_battle()
+        results = engine.simulate_battle_with_poke_engine(
+            main_pokemon, enemy_pokemon, "watergun", "tackle", 1, None, random.Random(seed)
+        )
+        return results[1]
+
+    assert round_hash.state_hash(resolved_state(555)) == round_hash.state_hash(resolved_state(555))
+
+    digests = {round_hash.state_hash(resolved_state(seed)) for seed in range(12)}
+    assert len(digests) > 1, "different seeds must not all collapse to one hash"
+
+
 def test_missing_moves_are_drawn_from_the_passed_rng(engine, make_battle):
     """The move fallback is a draw too, so it must honour the same generator."""
     calls = []

@@ -153,6 +153,10 @@ class MultiplayerController:
         self._seconds_since_sync = 0
         self._pending_reviewer_match_id = None
         self._turn_submissions_inflight = set()
+        # Rounds this client is already simulating, keyed by
+        # (match, round, attempt) so a replay is a new piece of work and a
+        # slow poll never starts the same one twice.
+        self._resolving = set()
 
         self._timer = QTimer(mw)
         self._timer.timeout.connect(self._on_timer)
@@ -560,6 +564,7 @@ class MultiplayerController:
             self._refresh_reviewer_pvp_battle()
         self._seconds_since_sync = 0
         self._save_state()
+        self._resolve_open_rounds()
 
     def _claim_raid_reward(self, reward):
         try:
@@ -627,15 +632,36 @@ class MultiplayerController:
         for match in (new_state.get("pvp") or {}).get("matches", []):
             old_match = old_matches.get(match.get("id"), {})
             opponent = match.get("opponent", "Your rival")
+            resolution = match.get("resolution") or {}
+            old_resolution = old_match.get("resolution") or {}
+            status = match.get("status")
+            old_status = old_match.get("status")
             if match.get("incoming_challenge") and not old_match.get(
                 "incoming_challenge"
             ):
                 self._queue_toast(f"{opponent} challenged you to a battle!")
+            elif status == "suspended" and old_status not in (None, "suspended"):
+                # A battle that ends with no winner and no explanation reads
+                # as the addon losing it.
+                reason = match.get("suspended_reason") or "the two games disagreed"
+                self._queue_toast(
+                    f"Battle against {opponent} suspended - {reason}. "
+                    "No winner, and your turn token came back."
+                )
+            elif status == "stalled" and old_status not in (None, "stalled"):
+                self._queue_toast(
+                    f"{opponent} has not confirmed the round yet - the battle is on hold."
+                )
+            elif resolution.get("attempt", 1) > old_resolution.get("attempt", 1):
+                self._queue_toast(
+                    f"Round {resolution.get('round', '')} against {opponent} "
+                    "is being replayed - no damage was applied."
+                )
             elif match.get("opponent_move_committed") and not old_match.get(
                 "opponent_move_committed"
             ):
                 self._queue_toast(f"{opponent} committed their move!")
-            elif match.get("status") == "finished" and old_match.get("status") not in (
+            elif status == "finished" and old_status not in (
                 None,
                 "finished",
             ):
@@ -645,6 +671,205 @@ class MultiplayerController:
                     self._queue_toast(f"You won the battle against {opponent}!")
                 else:
                     self._queue_toast(f"The battle against {opponent} is over.")
+
+    # --- Peer-verified PvP rounds -------------------------------------------
+
+    def _battle_states(self) -> dict:
+        """Per-match engine state carried between rounds, kept on disk.
+
+        The server stores HP and hashes, not Pokemon state, so each client
+        keeps its own. Losing it (a fresh profile, a cleared cache) does not
+        let the round be faked: the reconstruction below will disagree with
+        the opponent, and a disagreement suspends the battle rather than
+        deciding it.
+        """
+        return self.state.setdefault("pvp_battle_states", {})
+
+    def _carried_state(self, match_id: str, round_number: int, resolution=None):
+        """The state this round continues from.
+
+        The server's copy wins: it is the one *both* clients reported at the
+        end of the last round, so it is the one this client's opponent will
+        also be simulating from. The local cache is the fallback for a
+        server that does not carry state yet.
+        """
+        from_server = (resolution or {}).get("carried_state")
+        if from_server:
+            return from_server
+        carried = self._battle_states().get(match_id)
+        if not carried or carried.get("after_round") != round_number - 1:
+            return None
+        return carried.get("state")
+
+    @staticmethod
+    def _pvp_modules():
+        """Import the resolver lazily.
+
+        It pulls in the whole battle engine and its move data, which is
+        several megabytes of JSON: worth loading the first time a PvP round
+        actually has to be simulated, not on every Anki start.
+        """
+        from . import pvp_resolution, pvp_team
+
+        return pvp_resolution, pvp_team
+
+    def _resolve_open_rounds(self):
+        """Simulate and report any open round this client has not answered.
+
+        Runs off the review flow entirely: the poll that discovers the round
+        is already on a background thread, and the simulation and its submit
+        go back to one.
+        """
+        if not self.enabled:
+            return
+        username = (load_credentials() or {}).get("username")
+        if not username:
+            return
+        matches = (self.state.get("pvp") or {}).get("matches", [])
+        # Forget work claimed for battles that are over, so a long session
+        # does not carry every round it ever played.
+        live = {match.get("id") for match in matches if match.get("status") == "active"}
+        self._resolving = {key for key in self._resolving if key[0] in live}
+        battle_states = self._battle_states()
+        for finished in [key for key in battle_states if key not in live]:
+            del battle_states[finished]
+        for match in matches:
+            resolution = match.get("resolution")
+            if not resolution or match.get("status") != "active":
+                continue
+            if resolution.get("you_submitted"):
+                continue
+            key = (
+                match.get("id"),
+                resolution.get("round"),
+                resolution.get("attempt"),
+            )
+            if key in self._resolving:
+                continue
+            self._resolving.add(key)
+            self._start_round_resolution(match, resolution, username, key)
+
+    def _start_round_resolution(self, match, resolution, username, key):
+        match_id = match.get("id")
+        round_number = int(resolution.get("round") or 0)
+        moves = resolution.get("moves") or {}
+        opponent = match.get("opponent")
+        # Roles, not viewpoints: both clients put the challenger on the
+        # state's user side, or every honest round would hash differently.
+        i_am_challenger = bool(match.get("you_are_challenger"))
+        challenger_name = username if i_am_challenger else opponent
+        opponent_name = opponent if i_am_challenger else username
+        carried = self._carried_state(match_id, round_number, resolution)
+        challenger_team = match.get("your_team") if i_am_challenger else match.get("opponent_team")
+        opponent_team = match.get("opponent_team") if i_am_challenger else match.get("your_team")
+
+        pvp_resolution, _ = self._pvp_modules()
+
+        def task():
+            return pvp_resolution.resolve_round(
+                moves.get(challenger_name),
+                moves.get(opponent_name),
+                resolution.get("seed"),
+                challenger_team=challenger_team,
+                opponent_team=opponent_team,
+                carried_state=carried,
+            )
+
+        def on_done(future):
+            try:
+                result = future.result()
+            except pvp_resolution.ResolutionError as exc:
+                self._resolving.discard(key)
+                self.logger.log("warning", f"Could not resolve PvP round: {exc}")
+                return
+            except Exception as exc:
+                self._resolving.discard(key)
+                self.logger.log("error", f"PvP round resolution failed: {exc}")
+                return
+            ending_state = pvp_resolution.dump_state(result.state)
+            self._battle_states()[match_id] = {
+                "after_round": round_number,
+                "state": ending_state,
+            }
+            self._save_state()
+            self._submit_round_result(
+                match_id,
+                round_number,
+                result,
+                ending_state,
+                {
+                    challenger_name: result.hp[pvp_resolution.CHALLENGER],
+                    opponent_name: result.hp[pvp_resolution.OPPONENT],
+                },
+                key,
+            )
+
+        mw.taskman.run_in_background(task, on_done)
+
+    def _submit_round_result(self, match_id, round_number, result, ending_state, hp_after, key):
+        def task():
+            return self.api.submit_round_result(
+                match_id,
+                round_number,
+                result.state_hash,
+                hp_after,
+                engine_version=self._engine_version(),
+                log_digest=result.log_digest,
+                # Reported so the server can hand it back next round. It is
+                # kept only if the opponent reported the same one, so a
+                # client cannot write the battle it would like to continue.
+                state=ending_state,
+            )
+
+        def on_done(future):
+            # The key stays claimed on success: this client has now reported
+            # this attempt, and reporting a *different* result for it would
+            # suspend the battle.
+            try:
+                state = future.result()
+            except MultiplayerAuthError:
+                self._resolving.discard(key)
+                self._handle_auth_failure()
+                return
+            except Exception as exc:
+                # A 409 means the server already moved on (deadline passed,
+                # or the match was suspended); anything else is worth one
+                # more try on the next poll.
+                self._resolving.discard(key)
+                self.logger.log("warning", f"Could not report PvP round: {exc}")
+                return
+            self._apply_state(state)
+
+        mw.taskman.run_in_background(task, on_done)
+
+    def pvp_match_credentials(self):
+        """(engine_version, team) to send when starting or accepting a match.
+
+        Both are uploaded once per match: the version so a skew is refused up
+        front instead of suspending a battle mid-round, the team so every
+        later round has the same inputs on both machines. Either can come
+        back None — a missing one costs a check, not the battle.
+        """
+        return self._engine_version(), self._serialized_team()
+
+    def _serialized_team(self):
+        try:
+            _, pvp_team = self._pvp_modules()
+            return pvp_team.dump_team(self.main_pokemon.to_poke_engine_Pokemon())
+        except Exception as exc:
+            self.logger.log("warning", f"Could not serialize PvP team: {exc}")
+            return None
+
+    def _engine_version(self):
+        try:
+            from .engine_version import engine_version
+
+            return engine_version()
+        except Exception as exc:
+            # Without a version the server cannot spot a skew, but a match
+            # is still playable — do not block the round on it.
+            self.logger.log("warning", f"Could not compute engine version: {exc}")
+            return None
 
     def _has_active_session(self) -> bool:
         return bool(self.state.get("raid")) or self._has_active_match()

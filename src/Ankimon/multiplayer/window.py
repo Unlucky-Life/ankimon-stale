@@ -14,6 +14,7 @@ from PyQt6.QtCore import QByteArray, QSize
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -32,6 +33,7 @@ from PyQt6.QtWidgets import (
 
 from . import get_controller
 from .api_client import MultiplayerConflictError, load_credentials
+from .pvp_status import can_claim, match_row_text, match_status_line
 
 _window = None
 
@@ -649,6 +651,14 @@ class MultiplayerWindow(QDialog):
         reviewer_hint.setStyleSheet("color: #5D6D7E; font-style: italic;")
         layout.addWidget(reviewer_hint)
 
+        # Peer-verified rounds spend real time waiting on the opponent's
+        # client, and can end with no winner. Saying so is the difference
+        # between "the battle is resolving" and "the addon is broken".
+        self.match_status_label = QLabel("")
+        self.match_status_label.setWordWrap(True)
+        self.match_status_label.setStyleSheet("color: #5D6D7E; font-style: italic;")
+        layout.addWidget(self.match_status_label)
+
         respond_row = QHBoxLayout()
         self.accept_button = QPushButton("Accept challenge")
         self.accept_button.clicked.connect(lambda: self._on_respond(True))
@@ -656,6 +666,13 @@ class MultiplayerWindow(QDialog):
         self.decline_button = QPushButton("Decline")
         self.decline_button.clicked.connect(lambda: self._on_respond(False))
         respond_row.addWidget(self.decline_button)
+        self.claim_button = QPushButton("Claim battle")
+        self.claim_button.setToolTip(
+            "End a battle your opponent stopped confirming. It ends on "
+            "forfeit - the unconfirmed round's damage is never applied."
+        )
+        self.claim_button.clicked.connect(self._on_claim_match)
+        respond_row.addWidget(self.claim_button)
         layout.addLayout(respond_row)
 
         return tab
@@ -691,10 +708,11 @@ class MultiplayerWindow(QDialog):
         if not opponent:
             tooltip("Selected friend cannot be challenged.")
             return
+        version, team = self.controller.pvp_match_credentials()
         self._run(
             f"Challenging {friend.get('username', opponent)}...",
             lambda: self.controller.api.challenge_friend(
-                opponent, self.controller.active_pokemon_payload()
+                opponent, self.controller.active_pokemon_payload(), version, team
             ),
         )
 
@@ -706,10 +724,11 @@ class MultiplayerWindow(QDialog):
         if not opponent:
             tooltip("Enter a username to challenge.")
             return
+        version, team = self.controller.pvp_match_credentials()
         self._run(
             f"Challenging {opponent}...",
             lambda: self.controller.api.challenge_friend(
-                opponent, self.controller.active_pokemon_payload()
+                opponent, self.controller.active_pokemon_payload(), version, team
             ),
         )
 
@@ -718,11 +737,22 @@ class MultiplayerWindow(QDialog):
         if not match or not match.get("incoming_challenge"):
             tooltip("Select an incoming challenge first.")
             return
+        version, team = self.controller.pvp_match_credentials()
         self._run(
             "Sending response...",
             lambda: self.controller.api.respond_to_challenge(
-                match["id"], accept, self.controller.active_pokemon_payload()
+                match["id"], accept, self.controller.active_pokemon_payload(), version, team
             ),
+        )
+
+    def _on_claim_match(self):
+        match = self._selected_match()
+        if not match or not can_claim(match):
+            tooltip("This battle cannot be claimed yet.")
+            return
+        self._run(
+            "Claiming battle...",
+            lambda: self.controller.api.claim_match(match["id"]),
         )
 
     # --- Shared plumbing --------------------------------------------------
@@ -864,18 +894,7 @@ class MultiplayerWindow(QDialog):
 
         self.match_list.clear()
         for match in pvp.get("matches", []):
-            opponent = match.get("opponent", "?")
-            status = match.get("status", "?")
-            if match.get("incoming_challenge"):
-                text = f"{opponent} challenged you!"
-            elif status == "active":
-                round_no = match.get("round", 1)
-                you = "yes" if match.get("your_move_committed") else "no"
-                them = "yes" if match.get("opponent_move_committed") else "no"
-                text = f"{opponent} - round {round_no} (you {you} / them {them})"
-            else:
-                text = f"{opponent} - {status}"
-            item = QListWidgetItem(text)
+            item = QListWidgetItem(match_row_text(match))
             item.setData(0x0100, match)
             self.match_list.addItem(item)
 
@@ -887,6 +906,10 @@ class MultiplayerWindow(QDialog):
         is_incoming = bool(match and match.get("incoming_challenge"))
         self.accept_button.setEnabled(is_incoming)
         self.decline_button.setEnabled(is_incoming)
+        self.accept_button.setEnabled(is_incoming)
+        self.decline_button.setEnabled(is_incoming)
+        self.claim_button.setEnabled(bool(match and can_claim(match)))
+        self.match_status_label.setText(match_status_line(match))
 
     def _update_pvp_gate_controls(self):
         human_enabled = self._human_pvp_enabled()
