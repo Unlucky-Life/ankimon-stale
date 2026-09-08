@@ -14,6 +14,7 @@ from PyQt6.QtCore import QByteArray, QSize
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -754,27 +755,6 @@ class MultiplayerWindow(QDialog):
             lambda: self.controller.api.claim_match(match["id"]),
         )
 
-    def _on_commit_turn(self):
-        match = self._selected_match()
-        if not match or match.get("status") != "active":
-            tooltip("Select an active battle first.")
-            return
-        if match.get("your_move_committed"):
-            tooltip("You already committed a move this round.")
-            return
-        tokens = (self.controller.state.get("pvp") or {}).get("tokens", 0)
-        if tokens < 1:
-            tooltip("No turn tokens - answer more cards to charge one!")
-            return
-        move = self.move_combo.currentText()
-        if not move:
-            tooltip("Your Pokemon has no moves to use.")
-            return
-        self._run(
-            f"Committing {move}...",
-            lambda: self.controller.api.submit_turn(match["id"], move),
-        )
-
     # --- Shared plumbing --------------------------------------------------
 
     def _run(self, busy_message: str, task, conflict_message: Optional[str] = None):
@@ -926,18 +906,8 @@ class MultiplayerWindow(QDialog):
         is_incoming = bool(match and match.get("incoming_challenge"))
         self.accept_button.setEnabled(is_incoming)
         self.decline_button.setEnabled(is_incoming)
-        # A round whose moves are both in is being resolved, not played:
-        # the next move is committed after it lands.
-        resolving = bool(match and match.get("resolution"))
-        can_commit = bool(
-            match
-            and match.get("status") == "active"
-            and not match.get("your_move_committed")
-            and not resolving
-        )
         self.accept_button.setEnabled(is_incoming)
         self.decline_button.setEnabled(is_incoming)
-        self.commit_button.setEnabled(can_commit)
         self.claim_button.setEnabled(bool(match and can_claim(match)))
         self.match_status_label.setText(match_status_line(match))
 
