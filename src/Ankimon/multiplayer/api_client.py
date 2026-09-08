@@ -240,19 +240,36 @@ class MultiplayerApiClient:
     # --- Friend battles ---------------------------------------------------
 
     def challenge_friend(
-        self, opponent_username: str, active_pokemon: Optional[dict] = None
+        self,
+        opponent_username: str,
+        active_pokemon: Optional[dict] = None,
+        engine_version: Optional[str] = None,
+        team: Optional[str] = None,
     ) -> dict:
         payload = {"opponent": opponent_username}
         if active_pokemon:
             payload["active_pokemon"] = active_pokemon
+        if engine_version:
+            payload["engine_version"] = engine_version
+        if team:
+            payload["team"] = team
         return self._request("POST", "/matches", payload=payload)
 
     def respond_to_challenge(
-        self, match_id: str, accept: bool, active_pokemon: Optional[dict] = None
+        self,
+        match_id: str,
+        accept: bool,
+        active_pokemon: Optional[dict] = None,
+        engine_version: Optional[str] = None,
+        team: Optional[str] = None,
     ) -> dict:
         payload = {"accept": accept}
         if active_pokemon:
             payload["active_pokemon"] = active_pokemon
+        if accept and engine_version:
+            payload["engine_version"] = engine_version
+        if accept and team:
+            payload["team"] = team
         return self._request(
             "POST", f"/matches/{match_id}/respond", payload=payload
         )
@@ -264,3 +281,37 @@ class MultiplayerApiClient:
             payload={"move": move},
             idempotency_key=str(uuid.uuid4()),
         )
+
+    def submit_round_result(
+        self,
+        match_id: str,
+        round_number: int,
+        state_hash: str,
+        hp_after: dict,
+        engine_version: Optional[str] = None,
+        log_digest: Optional[str] = None,
+        state: Optional[dict] = None,
+    ) -> dict:
+        """Report this client's simulation of an open round.
+
+        Idempotent per (match, round, player) server-side, so a retry after a
+        dropped response is safe — but only with an identical body: reporting
+        a *different* result for the same round suspends the match.
+        """
+        payload = {"state_hash": state_hash, "hp_after": hp_after}
+        if engine_version:
+            payload["engine_version"] = engine_version
+        if log_digest:
+            payload["log_digest"] = log_digest
+        if state is not None:
+            # The end-of-round battle state. The server keeps it only when
+            # both clients sent the same one, and hands it back with the
+            # next round so a lost local cache cannot cost the match.
+            payload["state"] = state
+        return self._request(
+            "POST", f"/matches/{match_id}/rounds/{round_number}/result", payload=payload
+        )
+
+    def claim_match(self, match_id: str) -> dict:
+        """Claim a stalled battle on forfeit, once the grace window passed."""
+        return self._request("POST", f"/matches/{match_id}/claim")

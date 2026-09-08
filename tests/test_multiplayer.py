@@ -1232,3 +1232,298 @@ def test_load_credentials_is_none_for_an_unusable_file(api_client_module):
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
         assert api_client_module.load_credentials() is None
+# --- Peer-verified round poller ------------------------------------------
+
+
+class SyncTaskman:
+    """Runs background work inline, so a test can see the whole chain."""
+
+    def __init__(self):
+        self.errors = []
+
+    def run_in_background(self, task, on_done):
+        class Future:
+            def __init__(self, fn):
+                self._fn = fn
+
+            def result(self):
+                return self._fn()
+
+        on_done(Future(task))
+
+
+class FakeResolution:
+    """Stands in for the engine: records inputs, returns a fixed result."""
+
+    def __init__(self):
+        self.calls = []
+        self.CHALLENGER = "challenger"
+        self.OPPONENT = "opponent"
+
+        class ResolutionError(ValueError):
+            pass
+
+        self.ResolutionError = ResolutionError
+
+    def resolve_round(self, challenger_move, opponent_move, seed, **kwargs):
+        self.calls.append(
+            {
+                "challenger_move": challenger_move,
+                "opponent_move": opponent_move,
+                "seed": seed,
+                **kwargs,
+            }
+        )
+        return types.SimpleNamespace(
+            state="engine-state",
+            hp={"challenger": 71, "opponent": 62},
+            state_hash="deadbeef",
+            log_digest="cafe",
+        )
+
+    def dump_state(self, state):
+        return {"carried": state}
+
+
+def _resolving_controller(module, monkeypatch, match, submit_result=None):
+    controller = _make_controller(module)
+    resolution = FakeResolution()
+    module.mw.taskman = SyncTaskman()
+    submissions = []
+
+    def submit_round_result(match_id, round_number, state_hash, hp_after, **kwargs):
+        submissions.append(
+            {
+                "match_id": match_id,
+                "round": round_number,
+                "state_hash": state_hash,
+                "hp_after": hp_after,
+                **kwargs,
+            }
+        )
+        return submit_result or {}
+
+    controller.api.submit_round_result = submit_round_result
+    controller._pvp_modules = lambda: (resolution, None)
+    controller._engine_version = lambda: "1.0+abc"
+    controller.state = {"pvp": {"matches": [match]}}
+    return controller, resolution, submissions
+
+
+def _open_match(**overrides):
+    match = {
+        "id": "m1",
+        "status": "active",
+        "opponent": "gary",
+        "you_are_challenger": True,
+        "your_team": "ash-team",
+        "opponent_team": "gary-team",
+        "resolution": {
+            "round": 1,
+            "attempt": 1,
+            "seed": "0f0f0f0f0f0f0f0f",
+            "moves": {"ash": "ember", "gary": "tackle"},
+            "you_submitted": False,
+        },
+    }
+    match.update(overrides)
+    return match
+
+
+def test_open_round_is_simulated_and_reported(multiplayer_module, monkeypatch):
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match()
+    )
+    controller._resolve_open_rounds()
+
+    assert len(resolution.calls) == 1
+    call = resolution.calls[0]
+    assert call["challenger_move"] == "ember" and call["opponent_move"] == "tackle"
+    assert call["challenger_team"] == "ash-team"
+    assert call["opponent_team"] == "gary-team"
+
+    assert len(submissions) == 1
+    submitted = submissions[0]
+    assert submitted["round"] == 1
+    assert submitted["state_hash"] == "deadbeef"
+    # HP goes up keyed by username, so the server can check both sides.
+    assert submitted["hp_after"] == {"ash": 71, "gary": 62}
+    assert submitted["engine_version"] == "1.0+abc"
+
+
+def test_the_challenger_stays_on_the_challenger_side(multiplayer_module, monkeypatch):
+    # Ash answered the challenge this time, so gary's team and move are the
+    # challenger's — the same battle both clients must build.
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match(you_are_challenger=False)
+    )
+    controller._resolve_open_rounds()
+
+    call = resolution.calls[0]
+    assert call["challenger_move"] == "tackle" and call["opponent_move"] == "ember"
+    assert call["challenger_team"] == "gary-team"
+    assert call["opponent_team"] == "ash-team"
+    assert submissions[0]["hp_after"] == {"gary": 71, "ash": 62}
+
+
+def test_a_round_this_client_already_reported_is_left_alone(multiplayer_module, monkeypatch):
+    match = _open_match()
+    match["resolution"]["you_submitted"] = True
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, match
+    )
+    controller._resolve_open_rounds()
+    assert resolution.calls == [] and submissions == []
+
+
+def test_a_round_is_only_simulated_once_across_polls(multiplayer_module, monkeypatch):
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match()
+    )
+    controller._resolve_open_rounds()
+    controller._resolve_open_rounds()
+    assert len(resolution.calls) == 1
+
+
+def test_a_replay_is_new_work(multiplayer_module, monkeypatch):
+    match = _open_match()
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, match
+    )
+    controller._resolve_open_rounds()
+    # The server replayed the round with a fresh seed: same round, new
+    # attempt, and this client has not reported *that* attempt.
+    match["resolution"]["attempt"] = 2
+    match["resolution"]["seed"] = "1111111111111111"
+    controller._resolve_open_rounds()
+    assert [call["seed"] for call in resolution.calls] == [
+        "0f0f0f0f0f0f0f0f",
+        "1111111111111111",
+    ]
+
+
+def test_the_battle_state_is_carried_to_the_next_round(multiplayer_module, monkeypatch):
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match()
+    )
+    controller._resolve_open_rounds()
+    carried = controller.state["pvp_battle_states"]["m1"]
+    assert carried == {"after_round": 1, "state": {"carried": "engine-state"}}
+
+    # Round 2 continues from it rather than restarting the battle.
+    match = _open_match()
+    match["resolution"]["round"] = 2
+    controller.state["pvp"]["matches"] = [match]
+    controller._resolve_open_rounds()
+    assert resolution.calls[-1]["carried_state"] == {"carried": "engine-state"}
+
+
+def test_a_settled_match_is_not_resolved(multiplayer_module, monkeypatch):
+    controller, resolution, _ = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match(status="suspended")
+    )
+    controller._resolve_open_rounds()
+    assert resolution.calls == []
+
+
+def test_an_engine_failure_is_logged_and_not_reported(multiplayer_module, monkeypatch):
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match()
+    )
+
+    def boom(*args, **kwargs):
+        raise resolution.ResolutionError("no outcome")
+
+    resolution.resolve_round = boom
+    controller._resolve_open_rounds()
+    # Reporting a guess would be worse than reporting nothing: an
+    # unconfirmed round stalls, it does not decide the battle.
+    assert submissions == []
+    assert any(level == "warning" for level, _ in controller.logger.entries)
+
+
+def _toast_for_match_change(module, old_match, new_match):
+    controller = _make_controller(module)
+    controller.state = {"pvp": {"matches": [old_match]}}
+    controller._derive_toasts(
+        {"pvp": {"matches": [old_match]}}, {"pvp": {"matches": [new_match]}}
+    )
+    return controller.drain_toast() or ""
+
+
+def test_toast_explains_a_suspended_battle(multiplayer_module):
+    # No winner and no explanation reads as the addon losing the match.
+    message = _toast_for_match_change(
+        multiplayer_module,
+        _open_match(),
+        _open_match(
+            status="suspended",
+            resolution=None,
+            suspended_reason="the two players' battle results kept disagreeing",
+        ),
+    )
+    assert "suspended" in message
+    assert "kept disagreeing" in message
+    assert "No winner" in message
+
+
+def test_toast_says_a_replayed_round_cost_nothing(multiplayer_module):
+    replayed = _open_match()
+    replayed["resolution"] = dict(replayed["resolution"], attempt=2)
+    message = _toast_for_match_change(multiplayer_module, _open_match(), replayed)
+    assert "replayed" in message and "no damage" in message
+
+
+def test_toast_names_the_player_a_stalled_battle_is_waiting_on(multiplayer_module):
+    message = _toast_for_match_change(
+        multiplayer_module, _open_match(), _open_match(status="stalled")
+    )
+    assert "gary" in message and "on hold" in message
+
+
+def test_the_round_result_carries_the_ending_state(multiplayer_module, monkeypatch):
+    controller, resolution, submissions = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match()
+    )
+    controller._resolve_open_rounds()
+    # Reported so the server can hand it back next round; it is kept there
+    # only if the opponent reported the same one.
+    assert submissions[0]["state"] == {"carried": "engine-state"}
+
+
+def test_the_servers_carried_state_wins_over_the_local_cache(multiplayer_module, monkeypatch):
+    match = _open_match()
+    match["resolution"]["round"] = 2
+    match["resolution"]["carried_state"] = {"carried": "from-server"}
+    controller, resolution, _ = _resolving_controller(
+        multiplayer_module, monkeypatch, match
+    )
+    # A stale local copy must not be preferred: the server's is the one both
+    # clients agreed on, so it is the one the opponent is simulating from.
+    controller.state["pvp_battle_states"] = {
+        "m1": {"after_round": 1, "state": {"carried": "stale-local"}}
+    }
+    controller._resolve_open_rounds()
+    assert resolution.calls[0]["carried_state"] == {"carried": "from-server"}
+
+
+def test_the_local_cache_is_used_when_the_server_carries_nothing(multiplayer_module, monkeypatch):
+    match = _open_match()
+    match["resolution"]["round"] = 2
+    controller, resolution, _ = _resolving_controller(
+        multiplayer_module, monkeypatch, match
+    )
+    controller.state["pvp_battle_states"] = {
+        "m1": {"after_round": 1, "state": {"carried": "local"}}
+    }
+    controller._resolve_open_rounds()
+    assert resolution.calls[0]["carried_state"] == {"carried": "local"}
+
+
+def test_finished_battles_stop_taking_up_cache(multiplayer_module, monkeypatch):
+    controller, _, _ = _resolving_controller(
+        multiplayer_module, monkeypatch, _open_match(status="finished", resolution=None)
+    )
+    controller.state["pvp_battle_states"] = {"m1": {"after_round": 4, "state": {}}}
+    controller._resolve_open_rounds()
+    assert controller.state["pvp_battle_states"] == {}
